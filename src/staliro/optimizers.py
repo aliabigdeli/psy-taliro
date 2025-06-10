@@ -63,6 +63,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from typing import Generic, Literal, Protocol, TypeVar, overload
+import os
+from openai import OpenAI
+import json
+import re
 
 from attrs import frozen
 from numpy import float_
@@ -303,3 +307,160 @@ def optimizer(func: UserFunc[C, R] | None = None) -> UserOptimizer[C, R] | Decor
         return UserOptimizer(func)
 
     return _decorator(func) if func else _decorator
+
+
+@frozen(slots=True)
+class LLMOptimizerResult:
+    """Data class containing additional data from LLM optimization.
+
+    :attribute best_sample: The best sample found during optimization
+    :attribute best_cost: The cost of the best sample
+    :attribute history: List of (sample, cost) pairs from the optimization history
+    :attribute num_evals: Number of function evaluations performed
+    """
+
+    best_sample: list[float]
+    best_cost: float
+    history: list[tuple[list[float], float]]
+    num_evals: int
+
+
+class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
+    """Optimizer implementing LLM-based optimization.
+
+    This optimizer uses a Large Language Model to generate and optimize samples based on previous
+    evaluations. The LLM is prompted with the optimization history and asked to generate new samples
+    that are likely to improve upon previous results.
+
+    :param model_name: Name of the LLM model to use (e.g. "gpt-3.5-turbo")
+    :param min_cost: The minimum cost to use as a termination condition
+    :param temperature: Temperature parameter for LLM sampling (0.0 to 1.0)
+    :param max_history: Maximum number of previous samples to include in LLM prompt
+    """
+
+    def __init__(
+        self,
+        model_name: str = "gpt-4.1-nano",
+        min_cost: float | None = None,
+        temperature: float = 0.7,
+        max_history: int = 10,
+    ):
+        self.model_name = model_name
+        self.min_cost = min_cost
+        self.temperature = temperature
+        self.max_history = max_history
+        
+        # Read API key from file and set environment variable
+        try:
+            with open("../api_key.txt", "r") as f:
+                api_key = f.read().strip()
+            os.environ["OPENAI_API_KEY"] = api_key
+            self.client = OpenAI()
+        except FileNotFoundError:
+            raise FileNotFoundError("api_key.txt file not found. Please create this file with your OpenAI API key.")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+
+    def _create_prompt(self, bounds: Sequence[Interval], history: list[tuple[list[float], float]]) -> str:
+        """Create a prompt for the LLM based on optimization history."""
+        prompt = f"""You are an optimization assistant. Your task is to generate a new sample point that will minimize the objective function.
+
+The input space has {len(bounds)} dimensions with the following bounds:
+{chr(10).join(f"Dimension {i}: [{bound[0]}, {bound[1]}]" for i, bound in enumerate(bounds))}
+
+Here are the previous {min(len(history), self.max_history)} samples and their costs:
+{chr(10).join(f"Sample {i}: {sample} -> Cost: {cost}" for i, (sample, cost) in enumerate(history[-self.max_history:]))}
+
+Based on this history, generate a new sample point that is likely to have a lower cost.
+Return only the sample point as a comma-separated list of numbers within the bounds.
+"""
+        return prompt
+
+    def _generate_sample(self, prompt: str) -> list[float]:
+        """Generate a new sample using the LLM.
+        
+        :param prompt: The prompt to send to the LLM
+        :returns: A list of floats representing the new sample point
+        :raises ValueError: If the LLM response cannot be parsed into a valid sample
+        """
+        try:
+            # Call OpenAI API using the new client interface
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You are an optimization assistant that generates sample points as comma-separated numbers."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=self.temperature,
+                max_tokens=100
+            )
+            
+            # Extract the response text
+            response_text = response.choices[0].message.content.strip()
+            
+            # Try to parse the response as a list of numbers
+            # First, try to find numbers in the text using regex
+            numbers = re.findall(r'-?\d*\.?\d+', response_text)
+            
+            if not numbers:
+                raise ValueError("No numbers found in LLM response")
+                
+            # Convert to floats
+            sample = [float(num) for num in numbers]
+            
+            return sample
+            
+        except Exception as e:
+            # If anything goes wrong, fall back to random sampling
+            print(f"Error generating sample: {e}")
+            import random
+            return [random.uniform(0, 1) for _ in range(10)]
+
+    def optimize(self, func: ObjFunc[float], params: Optimizer.Params) -> LLMOptimizerResult:
+        history: list[tuple[list[float], float]] = []
+        best_sample: list[float] = []
+        best_cost = float('inf')
+        num_evals = 0
+
+        # Generate initial random sample
+        rng = default_rng(params.seed)
+        current_sample = _sample_uniform(params.input_bounds, rng)
+        current_cost = func.eval_sample(current_sample)
+        history.append((current_sample, current_cost))
+        best_sample = current_sample
+        best_cost = current_cost
+        num_evals += 1
+
+        while num_evals < params.budget:
+            # Create prompt for LLM
+            prompt = self._create_prompt(params.input_bounds, history)
+            
+            # Generate new sample using LLM
+            new_sample = self._generate_sample(prompt)
+            
+            # Ensure sample is within bounds
+            new_sample = [
+                max(min(x, bound[1]), bound[0])
+                for x, bound in zip(new_sample, params.input_bounds)
+            ]
+            
+            # Evaluate new sample
+            new_cost = func.eval_sample(new_sample)
+            history.append((new_sample, new_cost))
+            num_evals += 1
+
+            # Update best sample if needed
+            if new_cost < best_cost:
+                best_sample = new_sample
+                best_cost = new_cost
+
+            # Check termination condition
+            if self.min_cost and best_cost <= self.min_cost:
+                break
+
+        return LLMOptimizerResult(
+            best_sample=best_sample,
+            best_cost=best_cost,
+            history=history,
+            num_evals=num_evals
+        )

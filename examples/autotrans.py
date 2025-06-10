@@ -9,7 +9,7 @@ import plotly.subplots as sp
 
 from staliro import Sample, SignalInput, TestOptions, staliro
 from staliro.models import Model, Result
-from staliro.optimizers import DualAnnealing
+from staliro.optimizers import DualAnnealing, LLMOptimizer
 from staliro.specifications import rtamt
 
 
@@ -54,7 +54,8 @@ model = AutotransModel()
 phi = "always[0,30] (rpm >= 3000) -> (always[0,4] speed >= 35)"
 specification = rtamt.parse_discrete(phi, {"rpm": 0, "speed": 1})
 
-optimizer = DualAnnealing()
+optimizer = LLMOptimizer() # DualAnnealing()
+# optimizer = DualAnnealing()
 
 options = TestOptions(
     runs=1,
