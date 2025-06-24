@@ -9,7 +9,7 @@ from aerobench.run_f16_sim import run_f16_sim
 
 from staliro import TestOptions, Trace, staliro
 from staliro.models import Blackbox, blackbox
-from staliro.optimizers import DualAnnealing
+from staliro.optimizers import DualAnnealing, LLMOptimizer
 from staliro.specifications import rtamt
 
 TSPAN: Final[tuple[float, float]] = (0, 15)
@@ -44,7 +44,8 @@ def f16_model(inputs: Blackbox.Inputs) -> Trace[list[float]]:
 
 
 spec = rtamt.parse_dense("always (alt > 0)", {"alt": 4})
-optimizer = DualAnnealing()
+optimizer = LLMOptimizer() # DualAnnealing()
+# optimizer = DualAnnealing()
 options = TestOptions(
     runs=1,
     iterations=10,

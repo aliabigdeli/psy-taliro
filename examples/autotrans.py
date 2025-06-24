@@ -9,7 +9,7 @@ import plotly.subplots as sp
 
 from staliro import Sample, SignalInput, TestOptions, staliro
 from staliro.models import Model, Result
-from staliro.optimizers import DualAnnealing
+from staliro.optimizers import DualAnnealing, LLMOptimizer
 from staliro.specifications import rtamt
 
 
@@ -25,8 +25,14 @@ class AutotransModel(Model[list[float], None]):
 
         model_opts = self.engine.simget(AutotransModel.MODEL_NAME)
         self.model_opts = self.engine.simset(model_opts, "SaveFormat", "Array")
+        
+        # Initialize counter for optimizer calls
+        self.call_count = 0
 
     def simulate(self, sample: Sample) -> Result[list[float], None]:
+        # Increment counter each time simulate is called
+        self.call_count += 1
+        
         assert sample.signals.tspan is not None
 
         tstart, tend = sample.signals.tspan
@@ -52,9 +58,16 @@ class AutotransModel(Model[list[float], None]):
 model = AutotransModel()
 
 phi = "always[0,30] (rpm >= 3000) -> (always[0,4] speed >= 35)"
-specification = rtamt.parse_discrete(phi, {"rpm": 0, "speed": 1})
+specification = rtamt.parse_discrete(phi, {"rpm": 1, "speed": 0})
 
-optimizer = DualAnnealing()
+# AT2_phi = "always[0, 10] (rpm <= 4750)"
+# specification = rtamt.parse_discrete(AT2_phi, {"rpm": 1})
+
+# AT6a_phi = "(always[0, 30] (rpm <= 3000)) -> (always[0,4] (speed <= 35))"
+# AT6a_specification = rtamt.parse_discrete(AT6a_phi, {"rpm": 1, "speed": 0})
+
+optimizer = LLMOptimizer() # DualAnnealing()
+# optimizer = DualAnnealing()
 
 options = TestOptions(
     runs=1,
@@ -74,8 +87,8 @@ if __name__ == "__main__":
     min_eval = min(run.evaluations, key=lambda e: e.cost)
 
     times = list(min_eval.extra.trace.times)
-    rpm = [state[0] for state in min_eval.extra.trace.states]
-    speed = [state[1] for state in min_eval.extra.trace.states]
+    rpm = [state[1] for state in min_eval.extra.trace.states]
+    speed = [state[0] for state in min_eval.extra.trace.states]
 
     figure = sp.make_subplots(rows=2, cols=1, shared_xaxes=True, x_title="Time (s)")
     figure.add_trace(go.Scatter(x=times, y=rpm), row=1, col=1)
@@ -83,3 +96,5 @@ if __name__ == "__main__":
     figure.update_yaxes(title_text="RPM", row=1, col=1)
     figure.update_yaxes(title_text="Speed", row=2, col=1)
     figure.write_image("autotrans.jpeg")
+    
+    print(f"Total simulator calls: {model.call_count}")
