@@ -70,6 +70,12 @@ managing virtual environments are:
 (Anaconda)[https://www.anaconda.com] can also be used to create separate python
 environments, and may be easier to set up on some systems.
 
+```bash
+conda env create --name psytaliro -f environment.yml
+conda activate psytaliro
+pip install --editable .
+```
+
 ## Example
 
 ```python
