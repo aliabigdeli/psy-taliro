@@ -13,3 +13,13 @@
 /build/
 /dist/
 /public/
+
+# API key
+api_key.txt
+
+# Example outputs
+f16.jpeg
+nonlinear.jpeg
+autotrans.jpeg
+Autotrans_shift.slxc
+examples/slprj/

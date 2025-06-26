@@ -9,7 +9,7 @@ from aerobench.run_f16_sim import run_f16_sim
 
 from staliro.core import BasicResult, ModelResult, Trace, best_eval, best_run
 from staliro.models import SignalTimes, SignalValues, blackbox
-from staliro.optimizers import DualAnnealing
+from staliro.optimizers import DualAnnealing, LLMOptimizer
 from staliro.options import Options
 from staliro.specifications import RTAMTDense
 from staliro.staliro import simulate_model, staliro
@@ -52,7 +52,8 @@ def f16_model(static: Sequence[float], times: SignalTimes, signals: SignalValues
 phi = "always (alt > 0)"
 specification = RTAMTDense(phi, {"alt": 4})
 
-optimizer = DualAnnealing()
+optimizer = LLMOptimizer() # DualAnnealing()
+# optimizer = DualAnnealing()
 
 initial_conditions = [
     math.pi / 4 + np.array([-math.pi / 20, math.pi / 30]),  # PHI

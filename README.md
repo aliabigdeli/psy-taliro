@@ -73,6 +73,10 @@ environments, and may be easier to set up on some systems.
 ```bash
 conda env create --name psytaliro -f environment.yml
 conda activate psytaliro
+export PYTHONPATH=/home/ali/codes/psy-taliro/src:$PYTHONPATH
+```
+Install as a package:
+```bash
 pip install --editable .
 ```
 
