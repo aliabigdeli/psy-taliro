@@ -11,7 +11,7 @@ from staliro.core.interval import Interval
 from staliro.core.model import BasicResult, Model, ModelInputs, ModelResult, Trace
 from staliro.core.result import best_eval, best_run
 from staliro.core.signal import Signal
-from staliro.optimizers import DualAnnealing, LLMOptimizer
+from staliro.optimizers import DualAnnealing, LLMOptimizer, DifferentialEvolution, PSO, BasinHopping, CMAES
 from staliro.options import Options, SignalOptions
 from staliro.specifications import RTAMTDiscrete, RTAMTDense
 from staliro.staliro import simulate_model, staliro
@@ -180,6 +180,7 @@ def plot_trace_variables(specification, trace, filename="autotrans.jpeg"):
 # Define Specifications (all specifications)
 
 AT1_phi = "G[0, 20] (speed <= 120)"
+# AT0_phi = "G[0, 20] (speed <= 30)"
 
 AT2_phi = "G[0, 10] (rpm <= 4750)"
 
@@ -195,18 +196,21 @@ AT53_phi = f"G[0, 30] (((not {gear_3_phi}) and (F[0.001,0.1] {gear_3_phi})) -> (
 gear_4_phi = f"(gear <= 4.5 and gear >= 3.5)"
 AT54_phi = f"G[0, 30] (((not {gear_4_phi}) and (F[0.001,0.1] {gear_4_phi})) -> (F[0.001, 0.1] (G[0,2.5] {gear_4_phi})))"
 
+# AT6_0_phi = "((G[0, 30] (rpm <= 4500)) -> (G[0,4] (speed <= 20)))"
 AT6a_phi = "((G[0, 30] (rpm <= 3000)) -> (G[0,4] (speed <= 35)))"
 AT6b_phi = "((G[0, 30] (rpm <= 3000)) -> (G[0,8] (speed <= 50)))"
 AT6c_phi = "((G[0, 30] (rpm <= 3000)) -> (G[0,20] (speed <= 65)))"
 AT6abc_phi = f"{AT6a_phi} and {AT6b_phi} and {AT6c_phi}"
 
 spec_dict = {
+    # "AT0": RTAMTDense(AT0_phi, {"speed": 0}),
     "AT1": RTAMTDense(AT1_phi, {"speed": 0}),
     "AT2": RTAMTDense(AT2_phi, {"rpm": 1}),
     "AT51": RTAMTDense(AT51_phi, {"gear": 2}),    
     "AT52": RTAMTDense(AT52_phi, {"gear": 2}),    
     "AT53": RTAMTDense(AT53_phi, {"gear": 2}),    
     "AT54": RTAMTDense(AT54_phi, {"gear": 2}),    
+    # "AT61-0": RTAMTDense(AT6_0_phi, {"speed": 0, "rpm":1}),
     "AT61": RTAMTDense(AT6a_phi, {"speed": 0, "rpm":1}),
     "AT62": RTAMTDense(AT6b_phi, {"speed": 0, "rpm":1}),
     "AT63": RTAMTDense(AT6c_phi, {"speed": 0, "rpm":1}),
@@ -238,8 +242,8 @@ if __name__ == "__main__":
         "--optimizer", 
         type=str, 
         default="DA", 
-        choices=["DA", "LLM"],
-        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM"])
+        choices=["DA", "LLM", "DE", "PSO", "BH", "CMAES"],
+        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "DE", "PSO", "BH", "CMAES"])
     )
     parser.add_argument(
         "--seed",
@@ -266,7 +270,39 @@ if __name__ == "__main__":
     print("-" * 50)
 
     if args.optimizer == "LLM":
-        optimizer = LLMOptimizer()
+        optimizer = LLMOptimizer(max_history=100)
+    elif args.optimizer == "DE":
+        # Using enhanced parameters for better exploration/exploitation balance
+        optimizer = DifferentialEvolution(
+            strategy='best1bin',    # Good balanced strategy
+            popsize=20,             # Slightly larger population for better exploration
+            mutation=(0.5, 1.2),    # Slightly wider mutation range
+            recombination=0.7,      # Standard crossover rate
+            polish=True             # Local refinement for better solutions
+        )
+    elif args.optimizer == "PSO":
+        # Particle Swarm Optimization - often very effective for falsification
+        optimizer = PSO(
+            swarm_size=30,          # Good balance of exploration and computational cost
+            inertia=0.9,            # High inertia for exploration
+            cognitive=2.0,          # Standard cognitive weight
+            social=2.0,             # Standard social weight
+            adaptive_inertia=True   # Reduces inertia over time for better convergence
+        )
+    elif args.optimizer == "BH":
+        # Basin Hopping - combines global jumps with local optimization
+        optimizer = BasinHopping(
+            niter=100,              # Number of basin hopping iterations
+            T=1.0,                  # Temperature for accepting jumps
+            stepsize=0.5            # Step size for random jumps
+        )
+    elif args.optimizer == "CMAES":
+        # CMA-ES-inspired optimizer using differential evolution
+        optimizer = CMAES(
+            sigma0=0.3,             # Initial standard deviation
+            popsize=None,           # Use default CMA-ES population sizing
+            maxiter_factor=50       # Conservative iteration factor
+        )
     else:
         optimizer = DualAnnealing()
     
@@ -288,6 +324,14 @@ if __name__ == "__main__":
         filename = f"./autotrans_all_specs/autotrans_{spec_name}_DA_rb{int(robustness)}"
     elif isinstance(optimizer, LLMOptimizer):
         filename = f"./autotrans_all_specs/autotrans_{spec_name}_LLM_rb{int(robustness)}"
+    elif isinstance(optimizer, DifferentialEvolution):
+        filename = f"./autotrans_all_specs/autotrans_{spec_name}_DE_rb{int(robustness)}"
+    elif isinstance(optimizer, PSO):
+        filename = f"./autotrans_all_specs/autotrans_{spec_name}_PSO_rb{int(robustness)}"
+    elif isinstance(optimizer, BasinHopping):
+        filename = f"./autotrans_all_specs/autotrans_{spec_name}_BH_rb{int(robustness)}"
+    elif isinstance(optimizer, CMAES):
+        filename = f"./autotrans_all_specs/autotrans_{spec_name}_CMAES_rb{int(robustness)}"
     else:
         filename = f"./autotrans_all_specs/autotrans_{spec_name}_rb{int(robustness)}"
     
@@ -301,7 +345,8 @@ if __name__ == "__main__":
         f.write(f"Random Seed: {args.seed}\n")
         f.write(f"Simulation Interval: {options.interval}\n")
         f.write(f"Number of Runs: {options.runs}\n")
-        f.write(f"Number of Iterations: {options.iterations}\n\n")
+        f.write(f"Number of Iterations: {options.iterations}\n")
+        f.write(f"Total Optimizer Calls: {options.runs * options.iterations}\n\n")
         
         # Show counterexample sample if violation occurred
         if robustness < 0:

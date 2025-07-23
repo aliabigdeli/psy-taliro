@@ -12,7 +12,7 @@ from staliro.core.interval import Interval
 from staliro.core.model import BasicResult, Model, ModelInputs, ModelResult, Trace, ExtraResult
 from staliro.core.result import best_eval, best_run
 from staliro.core.signal import Signal
-from staliro.optimizers import DualAnnealing, LLMOptimizer
+from staliro.optimizers import DualAnnealing, LLMOptimizer, DifferentialEvolution, PSO, BasinHopping, CMAES
 from staliro.options import Options, SignalOptions
 from staliro.specifications import RTAMTDiscrete, RTAMTDense
 from staliro.staliro import simulate_model, staliro
@@ -229,8 +229,8 @@ if __name__ == "__main__":
         "--optimizer", 
         type=str, 
         default="DA", 
-        choices=["DA", "LLM"],
-        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM"])
+        choices=["DA", "LLM", "DE", "PSO", "BH", "CMAES"],
+        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "DE", "PSO", "BH", "CMAES"])
     )
     parser.add_argument(
         "--seed",
@@ -257,7 +257,39 @@ if __name__ == "__main__":
     print("-" * 50)
 
     if args.optimizer == "LLM":
-        optimizer = LLMOptimizer()
+        optimizer = LLMOptimizer(max_history=100)
+    elif args.optimizer == "DE":
+        # Using enhanced parameters for better exploration/exploitation balance
+        optimizer = DifferentialEvolution(
+            strategy='best1bin',    # Good balanced strategy
+            popsize=20,             # Slightly larger population for better exploration
+            mutation=(0.5, 1.2),    # Slightly wider mutation range
+            recombination=0.7,      # Standard crossover rate
+            polish=True             # Local refinement for better solutions
+        )
+    elif args.optimizer == "PSO":
+        # Particle Swarm Optimization - often very effective for falsification
+        optimizer = PSO(
+            swarm_size=30,          # Good balance of exploration and computational cost
+            inertia=0.9,            # High inertia for exploration
+            cognitive=2.0,          # Standard cognitive weight
+            social=2.0,             # Standard social weight
+            adaptive_inertia=True   # Reduces inertia over time for better convergence
+        )
+    elif args.optimizer == "BH":
+        # Basin Hopping - combines global jumps with local optimization
+        optimizer = BasinHopping(
+            niter=100,              # Number of basin hopping iterations
+            T=1.0,                  # Temperature for accepting jumps
+            stepsize=0.5            # Step size for random jumps
+        )
+    elif args.optimizer == "CMAES":
+        # CMA-ES-inspired optimizer using differential evolution
+        optimizer = CMAES(
+            sigma0=0.3,             # Initial standard deviation
+            popsize=None,           # Use default CMA-ES population sizing
+            maxiter_factor=50       # Conservative iteration factor
+        )
     else:
         optimizer = DualAnnealing()
     
@@ -279,6 +311,14 @@ if __name__ == "__main__":
         filename = f"./cc_all_specs/cc_{spec_name}_DA_rb{int(robustness)}"
     elif isinstance(optimizer, LLMOptimizer):
         filename = f"./cc_all_specs/cc_{spec_name}_LLM_rb{int(robustness)}"
+    elif isinstance(optimizer, DifferentialEvolution):
+        filename = f"./cc_all_specs/cc_{spec_name}_DE_rb{int(robustness)}"
+    elif isinstance(optimizer, PSO):
+        filename = f"./cc_all_specs/cc_{spec_name}_PSO_rb{int(robustness)}"
+    elif isinstance(optimizer, BasinHopping):
+        filename = f"./cc_all_specs/cc_{spec_name}_BH_rb{int(robustness)}"
+    elif isinstance(optimizer, CMAES):
+        filename = f"./cc_all_specs/cc_{spec_name}_CMAES_rb{int(robustness)}"
     else:
         filename = f"./cc_all_specs/cc_{spec_name}_rb{int(robustness)}"
     
@@ -292,7 +332,8 @@ if __name__ == "__main__":
         f.write(f"Random Seed: {args.seed}\n")
         f.write(f"Simulation Interval: {options.interval}\n")
         f.write(f"Number of Runs: {options.runs}\n")
-        f.write(f"Number of Iterations: {options.iterations}\n\n")
+        f.write(f"Number of Iterations: {options.iterations}\n")
+        f.write(f"Total Optimizer Calls: {options.runs * options.iterations}\n\n")
         
         # Show counterexample sample if violation occurred
         if robustness < 0:
