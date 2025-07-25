@@ -9,9 +9,9 @@ import plotly.subplots as sp
 
 from staliro.core.interval import Interval
 from staliro.core.model import BasicResult, Model, ModelInputs, ModelResult, Trace
-from staliro.core.result import best_eval, best_run
+from staliro.core.result import best_eval, best_run, worst_eval, worst_run
 from staliro.core.signal import Signal
-from staliro.optimizers import DualAnnealing, LLMOptimizer, DifferentialEvolution, PSO, BasinHopping, CMAES
+from staliro.optimizers import DualAnnealing, LLMOptimizer, LLMGrayBoxOpt, DifferentialEvolution, PSO, BasinHopping, CMAES
 from staliro.options import Options, SignalOptions
 from staliro.specifications import RTAMTDiscrete, RTAMTDense
 from staliro.staliro import simulate_model, staliro
@@ -242,8 +242,8 @@ if __name__ == "__main__":
         "--optimizer", 
         type=str, 
         default="DA", 
-        choices=["DA", "LLM", "DE", "PSO", "BH", "CMAES"],
-        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "DE", "PSO", "BH", "CMAES"])
+        choices=["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES"],
+        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES"])
     )
     parser.add_argument(
         "--seed",
@@ -259,6 +259,11 @@ if __name__ == "__main__":
     
     logging.basicConfig(level=logging.DEBUG)
 
+    # Check if ./autotrans_all_specs folder exists, if not create it
+    if not os.path.exists("./autotrans_all_specs"):
+        os.makedirs("./autotrans_all_specs")
+        print("Created ./autotrans_all_specs folder")
+
     # Select specification from command line argument
     spec_name = args.spec
     specification = spec_dict[spec_name]
@@ -270,7 +275,51 @@ if __name__ == "__main__":
     print("-" * 50)
 
     if args.optimizer == "LLM":
-        optimizer = LLMOptimizer(max_history=100)
+        # Create prompts filename based on specification and seed
+        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
+        
+        optimizer = LLMOptimizer(
+            max_history=100,
+            save_prompts=True,
+            prompt_file=prompts_filename
+        )
+    elif args.optimizer == "LLMGB":
+        # Define dimension descriptions for the autotrans model
+        # Signal 1: 7 throttle control points at different time intervals (0-100%)
+        # Signal 2: 3 brake control points at different time intervals (0-325 units)
+        dimension_descriptions = [
+            "Throttle level at t=0.0s (0-100%): Initial acceleration input",
+            "Throttle level at t=8.33s (0-100%): Early phase acceleration control", 
+            "Throttle level at t=16.67s (0-100%): Mid-early phase acceleration control",
+            "Throttle level at t=25.0s (0-100%): Mid phase acceleration control",
+            "Throttle level at t=33.33s (0-100%): Mid-late phase acceleration control",
+            "Throttle level at t=41.67s (0-100%): Late phase acceleration control",
+            "Throttle level at t=50.0s (0-100%): Final acceleration input",
+            "Brake pressure at t=0.0s (0-325 units): Initial braking force",
+            "Brake pressure at t=25.0s (0-325 units): Mid-simulation braking force", 
+            "Brake pressure at t=50.0s (0-325 units): Final braking force"
+        ]
+        
+        # Define output variable descriptions
+        output_descriptions = {
+            "speed": "Vehicle speed in mph - how fast the car is traveling",
+            "rpm": "Engine RPM (revolutions per minute) - engine rotational speed", 
+            "gear": "Current transmission gear (1=first, 2=second, 3=third, 4=fourth gear)"
+        }
+        
+        # Create prompts filename based on specification and seed
+        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
+        
+        optimizer = LLMGrayBoxOpt(
+            dimension_descriptions=dimension_descriptions,
+            specification=specification,
+            output_descriptions=output_descriptions,
+            max_history=50,
+            temperature=0.8,
+            save_prompts=True,
+            prompt_file=prompts_filename,
+            include_output_states=True
+        )
     elif args.optimizer == "DE":
         # Using enhanced parameters for better exploration/exploitation balance
         optimizer = DifferentialEvolution(
@@ -306,22 +355,20 @@ if __name__ == "__main__":
     else:
         optimizer = DualAnnealing()
     
-    options = Options(runs=1, iterations=100, interval=(0, 50), signals=signals, seed=args.seed)
+    options = Options(runs=1, iterations=10, interval=(0, 50), signals=signals, seed=args.seed)
     result = staliro(model, specification, optimizer, options)
 
-    best_sample = best_eval(best_run(result)).sample
+    # best sample has the lowest robustness value (in falsification)
+    best_sample = worst_eval(worst_run(result)).sample
     best_result = simulate_model(model, options, best_sample)
 
     # Evaluate robustness
     robustness = specification.evaluate(best_result.trace.states, best_result.trace.times)
     
-    # Check if ./autotrans_all_specs folder exists, if not create it
-    if not os.path.exists("./autotrans_all_specs"):
-        os.makedirs("./autotrans_all_specs")
-        print("Created ./autotrans_all_specs folder")
-    
     if isinstance(optimizer, DualAnnealing):
         filename = f"./autotrans_all_specs/autotrans_{spec_name}_DA_rb{int(robustness)}"
+    elif isinstance(optimizer, LLMGrayBoxOpt):
+        filename = f"./autotrans_all_specs/autotrans_{spec_name}_LLMGB_rb{int(robustness)}"
     elif isinstance(optimizer, LLMOptimizer):
         filename = f"./autotrans_all_specs/autotrans_{spec_name}_LLM_rb{int(robustness)}"
     elif isinstance(optimizer, DifferentialEvolution):
@@ -364,6 +411,14 @@ if __name__ == "__main__":
         print(f"\nCounterexample input sample: {best_sample}")
     
     print(f"\nAnalysis report saved as: {txt_filename}")
+    
+    # Print prompts file location if using LLM optimizers
+    if isinstance(optimizer, LLMGrayBoxOpt):
+        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
+        print(f"LLM prompts saved as: {prompts_filename}")
+    elif isinstance(optimizer, LLMOptimizer):
+        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
+        print(f"LLM prompts saved as: {prompts_filename}")
         
     # Use generalized plotting function
     plot_trace_variables(specification, best_result.trace, filename+".jpeg")

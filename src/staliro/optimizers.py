@@ -199,6 +199,8 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
     :param min_cost: The minimum cost to use as a termination condition
     :param temperature: Temperature parameter for LLM sampling (0.0 to 1.0)
     :param max_history: Maximum number of previous samples to include in LLM prompt
+    :param save_prompts: Whether to save generated prompts to a file (default: False)
+    :param prompt_file: File path to save prompts to (default: "llm_prompts.txt")
     """
 
     def __init__(
@@ -207,11 +209,18 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
         min_cost: float | None = None,
         temperature: float = 0.7,
         max_history: int = 10,
+        save_prompts: bool = False,
+        prompt_file: str = "llm_prompts.txt",
     ):
         self.model_name = model_name
         self.min_cost = min_cost
         self.temperature = temperature
         self.max_history = max_history
+        self.save_prompts = save_prompts
+        self.prompt_file = prompt_file
+        
+        # Initialize prompt counter for tracking
+        self.prompt_counter = 0
         
         # Read API key from file and set environment variable
         try:
@@ -238,6 +247,20 @@ Based on this history, generate a new sample point that is likely to have a lowe
 Return only the sample point as a comma-separated list of numbers within the bounds.
 """
         return prompt
+
+    def _save_prompt(self, prompt: str, evaluation_num: int) -> None:
+        """Save the generated prompt to a file."""
+        try:
+            mode = 'a' if self.prompt_counter > 0 else 'w'
+            with open(self.prompt_file, mode, encoding='utf-8') as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"PROMPT #{self.prompt_counter + 1} (Evaluation #{evaluation_num})\n")
+                f.write(f"{'='*80}\n")
+                f.write(prompt)
+                f.write(f"\n{'='*80}\n\n")
+            self.prompt_counter += 1
+        except Exception as e:
+            print(f"Warning: Failed to save prompt to {self.prompt_file}: {e}")
 
     def _generate_sample(self, prompt: str) -> list[float]:
         """Generate a new sample using the LLM.
@@ -298,8 +321,427 @@ Return only the sample point as a comma-separated list of numbers within the bou
             # Create prompt for LLM
             prompt = self._create_prompt(bounds, history)
             
+            # Save prompt if requested
+            if self.save_prompts:
+                self._save_prompt(prompt, num_evals)
+            
             # Generate new sample using LLM
             new_sample = self._generate_sample(prompt)
+            
+            # Ensure sample is within bounds
+            new_sample = [
+                max(min(x, bound.upper), bound.lower)
+                for x, bound in zip(new_sample, bounds)
+            ]
+            
+            # Convert to Sample object and evaluate
+            sample_obj = Sample(new_sample)
+            new_cost = func.eval_sample(sample_obj)
+            history.append((new_sample, new_cost))
+            num_evals += 1
+
+            # Update best sample if needed
+            if new_cost < best_cost:
+                best_sample = new_sample
+                best_cost = new_cost
+
+            # Check termination condition
+            if self.min_cost and best_cost <= self.min_cost:
+                break
+
+        return LLMOptimizerResult(
+            best_sample=best_sample,
+            best_cost=best_cost,
+            history=history,
+            num_evals=num_evals
+        )
+
+
+class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
+    """Gray-box LLM optimizer that provides semantic descriptions of input dimensions.
+    
+    This optimizer extends the basic LLM optimizer by providing meaningful descriptions
+    of what each input dimension represents, STL specification in natural language,
+    and output dimension descriptions, allowing the LLM to make more informed
+    optimization decisions based on domain knowledge.
+
+    :param dimension_descriptions: List of descriptions for each input dimension
+    :param specification: The STL specification object to translate to natural language
+    :param output_descriptions: Optional dict mapping output variable names to descriptions
+    :param model_name: Name of the LLM model to use (e.g. "gpt-4.1-nano")
+    :param min_cost: The minimum cost to use as a termination condition
+    :param temperature: Temperature parameter for LLM sampling (0.0 to 1.0)
+    :param max_history: Maximum number of previous samples to include in LLM prompt
+    :param save_prompts: Whether to save generated prompts to a file (default: False)
+    :param prompt_file: File path to save prompts to (default: "llmgb_prompts.txt")
+    :param include_output_states: Whether to include system output states in the prompt (default: True)
+    """
+
+    def __init__(
+        self,
+        dimension_descriptions: list[str],
+        specification,
+        output_descriptions: dict[str, str] | None = None,
+        model_name: str = "gpt-4.1-nano",
+        min_cost: float | None = None,
+        temperature: float = 0.7,
+        max_history: int = 10,
+        save_prompts: bool = False,
+        prompt_file: str = "llmgb_prompts.txt",
+        include_output_states: bool = True,
+    ):
+        self.dimension_descriptions = dimension_descriptions
+        self.specification = specification
+        self.output_descriptions = output_descriptions or {}
+        self.model_name = model_name
+        self.min_cost = min_cost
+        self.temperature = temperature
+        self.max_history = max_history
+        self.save_prompts = save_prompts
+        self.prompt_file = prompt_file
+        self.include_output_states = include_output_states
+        
+        # Initialize prompt counter for tracking
+        self.prompt_counter = 0
+        
+        # Read API key from file and set environment variable
+        try:
+            with open("../api_key.txt", "r") as f:
+                api_key = f.read().strip()
+            os.environ["OPENAI_API_KEY"] = api_key
+            self.client = OpenAI()
+        except FileNotFoundError:
+            raise FileNotFoundError("api_key.txt file not found. Please create this file with your OpenAI API key.")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+
+    def _translate_stl_to_natural_language(self, stl_formula: str) -> str:
+        """Translate STL formula to natural language."""
+        
+        # Create a copy to work with
+        natural = stl_formula
+        
+        # Replace temporal operators with natural language
+        # G[a,b] -> "always between time a and b seconds"
+        natural = re.sub(r'G\[(\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?)\]', r'always between time \1 and \2 seconds', natural)
+        
+        # F[a,b] -> "eventually between time a and b seconds"  
+        natural = re.sub(r'F\[(\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?)\]', r'eventually between time \1 and \2 seconds', natural)
+        
+        # Replace logical operators
+        natural = natural.replace(' and ', ' AND ')
+        natural = natural.replace(' or ', ' OR ')
+        natural = natural.replace('not ', 'NOT ')
+        natural = natural.replace(' -> ', ' IMPLIES ')
+        
+        # Replace comparison operators with more natural language
+        natural = natural.replace('<=', ' is at most ')
+        natural = natural.replace('>=', ' is at least ')
+        natural = natural.replace('==', ' equals ')
+        natural = natural.replace('<', ' is less than ')
+        natural = natural.replace('>', ' is greater than ')
+        
+        # Clean up extra parentheses and spaces
+        natural = re.sub(r'\s+', ' ', natural)
+        natural = natural.strip()
+        
+        return natural
+
+    def _format_output_states(self, trace_info: dict) -> str:
+        """Format the output states from trace information for display in the prompt."""
+        try:
+            if not trace_info:
+                return "No trace information available"
+            
+            # Extract key information from the trace
+            output_lines = []
+            
+            # Show summary statistics for each output variable
+            for var_name, column_idx in self.specification.column_map.items():
+                if 'states' in trace_info and trace_info['states']:
+                    try:
+                        # Extract values for this variable across all time points
+                        var_values = [state[column_idx] if column_idx < len(state) else 0 
+                                    for state in trace_info['states']]
+                        
+                        if var_values:
+                            var_min = min(var_values)
+                            var_max = max(var_values)
+                            var_final = var_values[-1] if var_values else 0
+                            
+                            # Limit precision for readability
+                            # output_lines.append(
+                            #     f"{var_name}=[{var_min:.3f}, {var_max:.3f}], final={var_final:.3f}"
+                            # )
+                            output_lines.append(
+                                f"{var_name}={var_final:.3f}"
+                            )
+                    except (IndexError, TypeError):
+                        output_lines.append(f"{var_name}=N/A")
+            
+            return "; ".join(output_lines) if output_lines else "No variable data available"
+            
+        except Exception as e:
+            return f"Error formatting output states: {str(e)}"
+
+    def _get_evaluation_history(self, func, max_count: int) -> list[tuple[list[float], float, str]]:
+        """Get the recent evaluation history from the cost function with output states."""
+        try:
+            # Access the cost function's history
+            if not hasattr(func, 'history'):
+                return []
+            
+            history_with_states = []
+            recent_evaluations = func.history[-max_count:] if len(func.history) > max_count else func.history
+            
+            for evaluation in recent_evaluations:
+                sample_values = list(evaluation.sample)
+                cost = evaluation.cost
+                
+                if self.include_output_states:
+                    # Check if we have stored trace information for this evaluation
+                    trace_key = tuple(sample_values)  # Use sample as key
+                    trace_info = getattr(self, '_trace_cache', {}).get(trace_key, {})
+                    output_state_str = self._format_output_states(trace_info)
+                else:
+                    output_state_str = "Output states not included"
+                
+                history_with_states.append((sample_values, cost, output_state_str))
+            
+            return history_with_states
+            
+        except Exception as e:
+            print(f"Warning: Could not access evaluation history: {e}")
+            return []
+
+    def _create_prompt(self, bounds: Sequence[Interval], func, evaluation_count: int) -> str:
+        """Create a detailed prompt for the LLM with dimension descriptions and output states."""
+        
+        # Create dimension information with descriptions
+        dimension_info = []
+        for i, (bound, desc) in enumerate(zip(bounds, self.dimension_descriptions)):
+            dimension_info.append(f"Dimension {i}: [{bound.lower}, {bound.upper}] - {desc}")
+        
+        # Translate STL specification to natural language
+        stl_natural = self._translate_stl_to_natural_language(self.specification.phi)
+        
+        # Create output variable descriptions
+        output_info = []
+        for var_name, column_idx in self.specification.column_map.items():
+            if var_name in self.output_descriptions:
+                output_info.append(f"{var_name}: {self.output_descriptions[var_name]}")
+            else:
+                output_info.append(f"{var_name}: system output variable (column {column_idx})")
+        
+        # Get evaluation history with output states
+        history_with_states = self._get_evaluation_history(func, self.max_history)
+        
+        # Format history for display
+        if history_with_states:
+            history_display = []
+            for i, (sample, cost, output_state) in enumerate(history_with_states):
+                sample_str = [f'{val:.3f}' for val in sample]
+                history_line = f"Sample {i}: {sample_str} -> Cost: {cost:.6f}"
+                if self.include_output_states and output_state != "Output states not included":
+                    history_line += f"\n    Output: {output_state}"
+                history_display.append(history_line)
+            history_text = chr(10).join(history_display)
+        else:
+            history_text = "No previous evaluations available"
+
+        prompt = f"""You are an optimization assistant for a system falsification task. Your goal is to find input parameters that violate system specifications (negative cost values indicate violations).
+
+SYSTEM SPECIFICATION TO VIOLATE:
+STL Formula: {self.specification.phi}
+Natural Language: {stl_natural}
+
+OUTPUT VARIABLES:
+{chr(10).join(output_info)}
+
+INPUT CONTROL PARAMETERS:
+The input space has {len(bounds)} dimensions representing control parameters:
+{chr(10).join(dimension_info)}
+
+OPTIMIZATION CONTEXT:
+- Lower costs are better (negative values indicate specification violations)
+- You're trying to find parameter combinations that cause the system to behave incorrectly
+- Use the semantic meaning of each dimension and the specification requirements to make informed decisions
+- The specification describes what the system should NOT do (your goal is to make it do exactly that){"" if not self.include_output_states else chr(10) + "- Pay attention to the system output states to understand how inputs affect system behavior"}
+
+RECENT OPTIMIZATION HISTORY (last {min(len(history_with_states), self.max_history)} samples):
+{history_text}
+
+Based on this history, the specification requirements{"" if not self.include_output_states else ", the dimension meanings, and the observed system outputs"}, generate a new sample point (not in the history) that is likely to achieve a lower cost (violation).
+Consider:
+1. Which parameter combinations led to lower costs in the history{"" if not self.include_output_states else chr(10) + "2. How the system outputs changed with different input parameters"}
+{2 if not self.include_output_states else 3}. The physical/logical meaning of each parameter and how it affects the output variables
+{3 if not self.include_output_states else 4}. How the specification constrains the output variables and what inputs might violate these constraints{"" if not self.include_output_states else chr(10) + "5. Patterns in the output states that might indicate approaching or achieving violations"}
+Return only the sample point as a comma-separated list of numbers within the specified bounds.
+"""
+        return prompt
+
+    def _save_prompt(self, prompt: str, evaluation_num: int) -> None:
+        """Save the generated prompt to a file."""
+        try:
+            mode = 'a' if self.prompt_counter > 0 else 'w'
+            with open(self.prompt_file, mode, encoding='utf-8') as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"PROMPT #{self.prompt_counter + 1} (Evaluation #{evaluation_num})\n")
+                f.write(f"{'='*80}\n")
+                f.write(prompt)
+                f.write(f"\n{'='*80}\n\n")
+            self.prompt_counter += 1
+        except Exception as e:
+            print(f"Warning: Failed to save prompt to {self.prompt_file}: {e}")
+
+    def _generate_sample(self, prompt: str) -> list[float]:
+        """Generate a new sample using the LLM with enhanced error handling."""
+        try:
+            # Call OpenAI API using the new client interface
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert optimization assistant that understands system behavior and generates parameter values as comma-separated numbers."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=self.temperature,
+                max_tokens=200
+            )
+            
+            # Extract the response text
+            response_text = response.choices[0].message.content.strip()
+            
+            # Try to parse the response as a list of numbers
+            numbers = re.findall(r'-?\d*\.?\d+', response_text)
+            
+            if not numbers:
+                raise ValueError("No numbers found in LLM response")
+                
+            # Convert to floats
+            sample = [float(num) for num in numbers]
+            
+            return sample
+            
+        except Exception as e:
+            # If anything goes wrong, fall back to random sampling
+            print(f"Error generating sample with LLM: {e}")
+            import random
+            return [random.uniform(0, 1) for _ in range(len(self.dimension_descriptions))]
+
+    class TraceCaptureWrapper:
+        """Wrapper class that captures trace information during cost function evaluation."""
+        
+        def __init__(self, original_func: ObjectiveFn[float], optimizer_instance):
+            self.original_func = original_func
+            self.optimizer = optimizer_instance
+            
+        def eval_sample(self, sample):
+            """Evaluate a sample and capture trace information."""
+            try:
+                # Call original evaluation
+                cost = self.original_func.eval_sample(sample)
+                
+                # Try to capture trace information after evaluation
+                if hasattr(self.original_func, 'history') and self.original_func.history:
+                    # Try to extract trace information by re-accessing the model
+                    if (hasattr(self.original_func, 'model') and 
+                        hasattr(self.original_func, 'specification') and 
+                        hasattr(self.original_func, 'interval') and 
+                        hasattr(self.original_func, 'layout')):
+                        try:
+                            # Re-run simulation to get trace (this is expensive but necessary)
+                            inputs = self.original_func.layout.decompose_sample(sample)
+                            model_result = self.original_func.model.simulate(inputs, self.original_func.interval)
+                            
+                            if hasattr(model_result, 'trace'):
+                                trace = model_result.trace
+                                # Store trace info in cache
+                                sample_key = tuple(list(sample))
+                                if not hasattr(self.optimizer, '_trace_cache'):
+                                    self.optimizer._trace_cache = {}
+                                self.optimizer._trace_cache[sample_key] = {
+                                    'states': trace.states,
+                                    'times': trace.times
+                                }
+                        except Exception as e:
+                            # If trace capture fails, continue without it
+                            pass
+                
+                return cost
+                
+            except Exception as e:
+                # If wrapper fails, fall back to original method
+                return self.original_func.eval_sample(sample)
+        
+        def eval_samples(self, samples):
+            """Evaluate multiple samples sequentially."""
+            return self.original_func.eval_samples(samples)
+        
+        def eval_samples_parallel(self, samples, processes):
+            """Evaluate multiple samples in parallel."""
+            return self.original_func.eval_samples_parallel(samples, processes)
+        
+        def __getattr__(self, name):
+            """Delegate any other attribute access to the original function."""
+            return getattr(self.original_func, name)
+
+    def _wrap_cost_function_with_trace_capture(self, func: ObjectiveFn[float]):
+        """Create a wrapper around the cost function to capture trace information."""
+        
+        # Initialize trace cache if not exists
+        if not hasattr(self, '_trace_cache'):
+            self._trace_cache = {}
+        
+        # Return the wrapper instead of modifying the original
+        return self.TraceCaptureWrapper(func, self)
+
+    def optimize(self, func: ObjectiveFn[float], bounds: Bounds, budget: int, seed: int) -> LLMOptimizerResult:
+        """Execute the gray-box LLM optimization."""
+        
+        # Validate that dimension descriptions match bounds
+        if len(self.dimension_descriptions) != len(bounds):
+            raise ValueError(f"Number of dimension descriptions ({len(self.dimension_descriptions)}) must match number of bounds ({len(bounds)})")
+        
+        # Initialize trace cache
+        self._trace_cache = {}
+        
+        # Wrap the cost function to capture trace information if output states are requested
+        if self.include_output_states:
+            func = self._wrap_cost_function_with_trace_capture(func)
+        
+        history: list[tuple[list[float], float]] = []
+        best_sample: list[float] = []
+        best_cost = float('inf')
+        num_evals = 0
+
+        # Generate initial random sample
+        rng = default_rng(seed)
+        current_sample = _sample_uniform(bounds, rng)
+        current_cost = func.eval_sample(current_sample)
+        history.append((current_sample, current_cost))
+        best_sample = current_sample
+        best_cost = current_cost
+        num_evals += 1
+
+        while num_evals < budget:
+            # Create enhanced prompt with dimension descriptions and output states
+            prompt = self._create_prompt(bounds, func, num_evals)
+            
+            # Save prompt if requested
+            if self.save_prompts:
+                self._save_prompt(prompt, num_evals)
+            
+            # Generate new sample using LLM
+            new_sample = self._generate_sample(prompt)
+            
+            # Ensure sample has correct length
+            if len(new_sample) != len(bounds):
+                # Pad with random values or truncate as needed
+                if len(new_sample) < len(bounds):
+                    for i in range(len(new_sample), len(bounds)):
+                        new_sample.append(rng.uniform(bounds[i].lower, bounds[i].upper))
+                else:
+                    new_sample = new_sample[:len(bounds)]
             
             # Ensure sample is within bounds
             new_sample = [
