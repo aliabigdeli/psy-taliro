@@ -146,7 +146,7 @@ def main():
     parser.add_argument(
         "-o", "--optimizer",
         default="DA",
-        choices=["DA", "DE", "BH", "PSO", "CMAES", "LLM"],
+        choices=["DA", "DE", "BH", "PSO", "CMAES", "LLM", "LLMGB"],
         help="Optimizer to use (default: DA)"
     )
     parser.add_argument(
@@ -158,6 +158,17 @@ def main():
         "--run-llm",
         action="store_true",
         help="Run LLM optimizer on falsified specifications"
+    )
+    parser.add_argument(
+        "-n", "--n-seeds",
+        type=int,
+        default=10,
+        help="Number of seeds to try (default: 10)"
+    )
+    parser.add_argument(
+        "--brfals",
+        action="store_true",
+        help="Break the seeds loop when specification is falsified (default: False)"
     )
     
     args = parser.parse_args()
@@ -192,7 +203,7 @@ def main():
         falsifying_seed = None
         falsifying_robustness = None
         
-        N_seeds = 10
+        N_seeds = args.n_seeds
         # Try seeds 1-N_seeds with specified optimizer
         for seed in range(1, N_seeds+1):
             print(f"\n🎲 Seed {seed} with {args.optimizer} optimizer:")
@@ -209,7 +220,8 @@ def main():
                 falsified = True
                 falsifying_seed = seed
                 falsifying_robustness = robustness
-                break
+                if args.break_falsified:
+                    break
             else:
                 print(f"✅ Satisfied. Robustness: {robustness:.6f}")
         

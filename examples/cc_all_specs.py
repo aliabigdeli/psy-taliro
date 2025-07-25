@@ -1,6 +1,7 @@
 import argparse
 import logging
 import random
+import csv
 from collections.abc import Sequence
 
 import numpy as np
@@ -10,9 +11,9 @@ import plotly.subplots as sp
 
 from staliro.core.interval import Interval
 from staliro.core.model import BasicResult, Model, ModelInputs, ModelResult, Trace, ExtraResult
-from staliro.core.result import best_eval, best_run
+from staliro.core.result import best_eval, best_run, worst_eval, worst_run
 from staliro.core.signal import Signal
-from staliro.optimizers import DualAnnealing, LLMOptimizer, DifferentialEvolution, PSO, BasinHopping, CMAES
+from staliro.optimizers import DualAnnealing, LLMOptimizer, LLMGrayBoxOpt, DifferentialEvolution, PSO, BasinHopping, CMAES
 from staliro.options import Options, SignalOptions
 from staliro.specifications import RTAMTDiscrete, RTAMTDense
 from staliro.staliro import simulate_model, staliro
@@ -229,8 +230,8 @@ if __name__ == "__main__":
         "--optimizer", 
         type=str, 
         default="DA", 
-        choices=["DA", "LLM", "DE", "PSO", "BH", "CMAES"],
-        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "DE", "PSO", "BH", "CMAES"])
+        choices=["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES"],
+        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES"])
     )
     parser.add_argument(
         "--seed",
@@ -257,7 +258,62 @@ if __name__ == "__main__":
     print("-" * 50)
 
     if args.optimizer == "LLM":
-        optimizer = LLMOptimizer(max_history=100)
+        # Create prompts filename based on specification and seed
+        prompts_filename = f"./cc_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
+        
+        optimizer = LLMOptimizer(
+            max_history=100,
+            save_prompts=True,
+            prompt_file=prompts_filename
+        )
+    elif args.optimizer == "LLMGB":
+        # Define dimension descriptions for the CC model
+        # Signal 1: 10 control points for lead car behavior (0-1 normalized throttle/brake)
+        # Signal 2: 10 control points for second car behavior (0-1 normalized throttle/brake)
+        dimension_descriptions = [
+            "Lead car control at t=0.0s (0-1): Initial lead car throttle/brake input",
+            "Lead car control at t=11.11s (0-1): Early phase lead car behavior control",
+            "Lead car control at t=22.22s (0-1): Early-mid phase lead car behavior control",
+            "Lead car control at t=33.33s (0-1): Mid phase lead car behavior control",
+            "Lead car control at t=44.44s (0-1): Mid-late phase lead car behavior control",
+            "Lead car control at t=55.56s (0-1): Late phase lead car behavior control",
+            "Lead car control at t=66.67s (0-1): Very late phase lead car behavior control",
+            "Lead car control at t=77.78s (0-1): Near-final phase lead car behavior control",
+            "Lead car control at t=88.89s (0-1): Pre-final phase lead car behavior control",
+            "Lead car control at t=100.0s (0-1): Final lead car throttle/brake input",
+            "Following car control at t=0.0s (0-1): Initial following car throttle/brake input",
+            "Following car control at t=11.11s (0-1): Early phase following car behavior control",
+            "Following car control at t=22.22s (0-1): Early-mid phase following car behavior control",
+            "Following car control at t=33.33s (0-1): Mid phase following car behavior control",
+            "Following car control at t=44.44s (0-1): Mid-late phase following car behavior control",
+            "Following car control at t=55.56s (0-1): Late phase following car behavior control",
+            "Following car control at t=66.67s (0-1): Very late phase following car behavior control",
+            "Following car control at t=77.78s (0-1): Near-final phase following car behavior control",
+            "Following car control at t=88.89s (0-1): Pre-final phase following car behavior control",
+            "Following car control at t=100.0s (0-1): Final following car throttle/brake input"
+        ]
+        
+        # Define output variable descriptions
+        output_descriptions = {
+            "y21": "Distance between car 2 and car 1 (following distance)",
+            "y32": "Distance between car 3 and car 2 (second following distance)",
+            "y43": "Distance between car 4 and car 3 (third following distance)",
+            "y54": "Distance between car 5 and car 4 (fourth following distance)"
+        }
+        
+        # Create prompts filename based on specification and seed
+        prompts_filename = f"./cc_all_specs/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
+        
+        optimizer = LLMGrayBoxOpt(
+            dimension_descriptions=dimension_descriptions,
+            specification=specification,
+            output_descriptions=output_descriptions,
+            max_history=50,
+            temperature=0.8,
+            save_prompts=True,
+            prompt_file=prompts_filename,
+            include_output_states=True
+        )
     elif args.optimizer == "DE":
         # Using enhanced parameters for better exploration/exploitation balance
         optimizer = DifferentialEvolution(
@@ -296,11 +352,36 @@ if __name__ == "__main__":
     options = Options(runs=1, iterations=100, interval=(0, 100), signals=signals, seed=args.seed)
     result = staliro(model, specification, optimizer, options)
 
-    best_sample = best_eval(best_run(result)).sample
+    # best sample has the lowest robustness value (in falsification)
+    best_sample = worst_eval(worst_run(result)).sample
     best_result = simulate_model(model, options, best_sample)
 
     # Evaluate robustness
     robustness = specification.evaluate(best_result.trace.states, best_result.trace.times)
+    
+    # Save results to CSV file
+    csv_filename = f"./cc_all_specs/results_{args.optimizer}.csv"
+    is_falsified = robustness < 0
+    
+    # Check if CSV file exists and write header if it doesn't
+    file_exists = os.path.exists(csv_filename)
+    with open(csv_filename, 'a', newline='') as csvfile:
+        fieldnames = ['specification', 'seed', 'robustness', 'Falsified']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        # Write header if file is new
+        if not file_exists:
+            writer.writeheader()
+        
+        # Write the current result
+        writer.writerow({
+            'specification': spec_name,
+            'seed': args.seed,
+            'robustness': robustness,
+            'Falsified': is_falsified
+        })
+    
+    print(f"Results saved to CSV: {csv_filename}")
     
     # Check if ./cc_all_specs folder exists, if not create it
     if not os.path.exists("./cc_all_specs"):
@@ -309,6 +390,8 @@ if __name__ == "__main__":
     
     if isinstance(optimizer, DualAnnealing):
         filename = f"./cc_all_specs/cc_{spec_name}_DA_rb{int(robustness)}"
+    elif isinstance(optimizer, LLMGrayBoxOpt):
+        filename = f"./cc_all_specs/cc_{spec_name}_LLMGB_rb{int(robustness)}"
     elif isinstance(optimizer, LLMOptimizer):
         filename = f"./cc_all_specs/cc_{spec_name}_LLM_rb{int(robustness)}"
     elif isinstance(optimizer, DifferentialEvolution):
@@ -351,6 +434,14 @@ if __name__ == "__main__":
         print(f"\nCounterexample input sample: {best_sample}")
     
     print(f"\nAnalysis report saved as: {txt_filename}")
+    
+    # Print prompts file location if using LLM optimizers
+    if isinstance(optimizer, LLMGrayBoxOpt):
+        prompts_filename = f"./cc_all_specs/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
+        print(f"LLM prompts saved as: {prompts_filename}")
+    elif isinstance(optimizer, LLMOptimizer):
+        prompts_filename = f"./cc_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
+        print(f"LLM prompts saved as: {prompts_filename}")
         
     # Use generalized plotting function
     plot_trace_variables(specification, best_result.trace, filename+".jpeg")

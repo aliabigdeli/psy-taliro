@@ -1,6 +1,7 @@
 import argparse
 import logging
 import random
+import csv
 from collections.abc import Sequence
 
 import numpy as np
@@ -355,7 +356,7 @@ if __name__ == "__main__":
     else:
         optimizer = DualAnnealing()
     
-    options = Options(runs=1, iterations=10, interval=(0, 50), signals=signals, seed=args.seed)
+    options = Options(runs=1, iterations=100, interval=(0, 50), signals=signals, seed=args.seed)
     result = staliro(model, specification, optimizer, options)
 
     # best sample has the lowest robustness value (in falsification)
@@ -364,6 +365,30 @@ if __name__ == "__main__":
 
     # Evaluate robustness
     robustness = specification.evaluate(best_result.trace.states, best_result.trace.times)
+    
+    # Save results to CSV file
+    csv_filename = f"./autotrans_all_specs/results_{args.optimizer}.csv"
+    is_falsified = robustness < 0
+    
+    # Check if CSV file exists and write header if it doesn't
+    file_exists = os.path.exists(csv_filename)
+    with open(csv_filename, 'a', newline='') as csvfile:
+        fieldnames = ['specification', 'seed', 'robustness', 'Falsified']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        # Write header if file is new
+        if not file_exists:
+            writer.writeheader()
+        
+        # Write the current result
+        writer.writerow({
+            'specification': spec_name,
+            'seed': args.seed,
+            'robustness': robustness,
+            'Falsified': is_falsified
+        })
+    
+    print(f"Results saved to CSV: {csv_filename}")
     
     if isinstance(optimizer, DualAnnealing):
         filename = f"./autotrans_all_specs/autotrans_{spec_name}_DA_rb{int(robustness)}"
