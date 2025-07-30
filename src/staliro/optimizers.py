@@ -179,13 +179,13 @@ class LLMOptimizerResult:
     :attribute best_sample: The best sample found during optimization
     :attribute best_cost: The cost of the best sample
     :attribute history: List of (sample, cost) pairs from the optimization history
-    :attribute num_evals: Number of function evaluations performed
+    :attribute nfev: Number of function evaluations performed
     """
 
     best_sample: list[float]
     best_cost: float
     history: list[tuple[list[float], float]]
-    num_evals: int
+    nfev: int
 
 
 class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
@@ -201,6 +201,7 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
     :param max_history: Maximum number of previous samples to include in LLM prompt
     :param save_prompts: Whether to save generated prompts to a file (default: False)
     :param prompt_file: File path to save prompts to (default: "llm_prompts.txt")
+    :param behavior: Behavior when falsifying case is encountered (default: Behavior.FALSIFICATION)
     """
 
     def __init__(
@@ -211,6 +212,7 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
         max_history: int = 10,
         save_prompts: bool = False,
         prompt_file: str = "llm_prompts.txt",
+        behavior: Behavior = Behavior.FALSIFICATION,
     ):
         self.model_name = model_name
         self.min_cost = min_cost
@@ -218,6 +220,7 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
         self.max_history = max_history
         self.save_prompts = save_prompts
         self.prompt_file = prompt_file
+        self.behavior = behavior
         
         # Initialize prompt counter for tracking
         self.prompt_counter = 0
@@ -306,7 +309,7 @@ Return only the sample point as a comma-separated list of numbers within the bou
         history: list[tuple[list[float], float]] = []
         best_sample: list[float] = []
         best_cost = float('inf')
-        num_evals = 0
+        nfev = 0
 
         # Generate initial random sample
         rng = default_rng(seed)
@@ -315,15 +318,24 @@ Return only the sample point as a comma-separated list of numbers within the bou
         history.append((current_sample, current_cost))
         best_sample = current_sample
         best_cost = current_cost
-        num_evals += 1
+        nfev += 1
 
-        while num_evals < budget:
+        # Check for early termination on initial sample
+        if self.behavior == Behavior.FALSIFICATION and current_cost < 0:
+            return LLMOptimizerResult(
+                best_sample=best_sample,
+                best_cost=best_cost,
+                history=history,
+                nfev=nfev
+            )
+
+        while nfev < budget:
             # Create prompt for LLM
             prompt = self._create_prompt(bounds, history)
             
             # Save prompt if requested
             if self.save_prompts:
-                self._save_prompt(prompt, num_evals)
+                self._save_prompt(prompt, nfev)
             
             # Generate new sample using LLM
             new_sample = self._generate_sample(prompt)
@@ -338,12 +350,16 @@ Return only the sample point as a comma-separated list of numbers within the bou
             sample_obj = Sample(new_sample)
             new_cost = func.eval_sample(sample_obj)
             history.append((new_sample, new_cost))
-            num_evals += 1
+            nfev += 1
 
             # Update best sample if needed
             if new_cost < best_cost:
                 best_sample = new_sample
                 best_cost = new_cost
+
+            # Check for early termination due to falsification
+            if self.behavior == Behavior.FALSIFICATION and new_cost < 0:
+                break
 
             # Check termination condition
             if self.min_cost and best_cost <= self.min_cost:
@@ -353,7 +369,7 @@ Return only the sample point as a comma-separated list of numbers within the bou
             best_sample=best_sample,
             best_cost=best_cost,
             history=history,
-            num_evals=num_evals
+            nfev=nfev
         )
 
 
@@ -375,6 +391,7 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
     :param save_prompts: Whether to save generated prompts to a file (default: False)
     :param prompt_file: File path to save prompts to (default: "llmgb_prompts.txt")
     :param include_output_states: Whether to include system output states in the prompt (default: True)
+    :param behavior: Behavior when falsifying case is encountered (default: Behavior.FALSIFICATION)
     """
 
     def __init__(
@@ -389,6 +406,7 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
         save_prompts: bool = False,
         prompt_file: str = "llmgb_prompts.txt",
         include_output_states: bool = True,
+        behavior: Behavior = Behavior.FALSIFICATION,
     ):
         self.dimension_descriptions = dimension_descriptions
         self.specification = specification
@@ -400,6 +418,7 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
         self.save_prompts = save_prompts
         self.prompt_file = prompt_file
         self.include_output_states = include_output_states
+        self.behavior = behavior
         
         # Initialize prompt counter for tracking
         self.prompt_counter = 0
@@ -712,7 +731,7 @@ Return only the sample point as a comma-separated list of numbers within the spe
         history: list[tuple[list[float], float]] = []
         best_sample: list[float] = []
         best_cost = float('inf')
-        num_evals = 0
+        nfev = 0
 
         # Generate initial random sample
         rng = default_rng(seed)
@@ -721,15 +740,24 @@ Return only the sample point as a comma-separated list of numbers within the spe
         history.append((current_sample, current_cost))
         best_sample = current_sample
         best_cost = current_cost
-        num_evals += 1
+        nfev += 1
 
-        while num_evals < budget:
+        # Check for early termination on initial sample
+        if self.behavior == Behavior.FALSIFICATION and current_cost < 0:
+            return LLMOptimizerResult(
+                best_sample=best_sample,
+                best_cost=best_cost,
+                history=history,
+                nfev=nfev
+            )
+
+        while nfev < budget:
             # Create enhanced prompt with dimension descriptions and output states
-            prompt = self._create_prompt(bounds, func, num_evals)
+            prompt = self._create_prompt(bounds, func, nfev)
             
             # Save prompt if requested
             if self.save_prompts:
-                self._save_prompt(prompt, num_evals)
+                self._save_prompt(prompt, nfev)
             
             # Generate new sample using LLM
             new_sample = self._generate_sample(prompt)
@@ -753,12 +781,16 @@ Return only the sample point as a comma-separated list of numbers within the spe
             sample_obj = Sample(new_sample)
             new_cost = func.eval_sample(sample_obj)
             history.append((new_sample, new_cost))
-            num_evals += 1
+            nfev += 1
 
             # Update best sample if needed
             if new_cost < best_cost:
                 best_sample = new_sample
                 best_cost = new_cost
+
+            # Check for early termination due to falsification
+            if self.behavior == Behavior.FALSIFICATION and new_cost < 0:
+                break
 
             # Check termination condition
             if self.min_cost and best_cost <= self.min_cost:
@@ -768,7 +800,7 @@ Return only the sample point as a comma-separated list of numbers within the spe
             best_sample=best_sample,
             best_cost=best_cost,
             history=history,
-            num_evals=num_evals
+            nfev=nfev
         )
 
 @frozen(slots=True)

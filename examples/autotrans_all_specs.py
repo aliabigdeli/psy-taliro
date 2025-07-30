@@ -280,7 +280,7 @@ if __name__ == "__main__":
         prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
         
         optimizer = LLMOptimizer(
-            max_history=100,
+            max_history=50,
             save_prompts=True,
             prompt_file=prompts_filename
         )
@@ -385,7 +385,8 @@ if __name__ == "__main__":
             'specification': spec_name,
             'seed': args.seed,
             'robustness': robustness,
-            'Falsified': is_falsified
+            'Falsified': is_falsified,
+            'nfev': result.runs[0].result.nfev
         })
     
     print(f"Results saved to CSV: {csv_filename}")
@@ -418,7 +419,7 @@ if __name__ == "__main__":
         f.write(f"Simulation Interval: {options.interval}\n")
         f.write(f"Number of Runs: {options.runs}\n")
         f.write(f"Number of Iterations: {options.iterations}\n")
-        f.write(f"Total Optimizer Calls: {options.runs * options.iterations}\n\n")
+        f.write(f"Number of Function Evaluations (equals to # of objective function call & model simulation & Simulink run): {result.runs[0].result.nfev}\n\n")
         
         # Show counterexample sample if violation occurred
         if robustness < 0:

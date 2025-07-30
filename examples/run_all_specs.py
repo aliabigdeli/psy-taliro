@@ -30,7 +30,7 @@ def get_benchmark_config(benchmark: str) -> Dict:
         return {
             "script": "autotrans_all_specs.py",
             "specs": ["AT1", "AT2", "AT51", "AT52", "AT53", "AT54", "AT61", "AT62", "AT63", "AT64"],
-            "default_timeout": 600,
+            "default_timeout": 3000,
             "output_dir": "autotrans_all_specs",
             "summary_file": "autotrans_analysis_summary.txt"
         }
@@ -38,7 +38,7 @@ def get_benchmark_config(benchmark: str) -> Dict:
         return {
             "script": "cc_all_specs.py", 
             "specs": ["CC1", "CC2", "CC3", "CC4", "CC5", "CCx"],
-            "default_timeout": 600,
+            "default_timeout": 3000,
             "output_dir": "cc_all_specs",
             "summary_file": "cc_analysis_summary.txt"
         }
@@ -46,7 +46,7 @@ def get_benchmark_config(benchmark: str) -> Dict:
         return {
             "script": "f16_all_specs.py",
             "specs": ["F16_ALT1", "F16_ALT2", "F16_ALT3", "F16_ROLL1", "F16_ROLL2", "F16_ROLL3", "F16_PITCH1", "F16_PITCH2", "F16_PITCH3", "F16_YAW1", "F16_MODE1", "F16_MODE2", "F16_SAFE1", "F16_SAFE2"],
-            "default_timeout": 600,
+            "default_timeout": 3000,
             "output_dir": "f16_all_specs",
             "summary_file": "f16_analysis_summary.txt"
         }
@@ -220,7 +220,7 @@ def main():
                 falsified = True
                 falsifying_seed = seed
                 falsifying_robustness = robustness
-                if args.break_falsified:
+                if args.brfals:
                     break
             else:
                 print(f"✅ Satisfied. Robustness: {robustness:.6f}")
