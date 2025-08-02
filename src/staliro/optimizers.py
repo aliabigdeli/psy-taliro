@@ -61,9 +61,11 @@ class UniformRandomResult:
 
     Attributes:
         average_cost: The average cost of all the samples selected.
+        nfev: Number of function evaluations performed.
     """
 
     average_cost: float
+    nfev: int
 
 
 class UniformRandom(Optimizer[float, UniformRandomResult]):
@@ -101,13 +103,15 @@ class UniformRandom(Optimizer[float, UniformRandomResult]):
         samples = [_sample_uniform(bounds, rng) for _ in range(budget)]
 
         if self.behavior is Behavior.MINIMIZATION:
-            costs = _minimize(samples, func, self.processes)
+            costs = list(_minimize(samples, func, self.processes))
+            nfev = len(samples)  # All samples were evaluated
         else:
-            costs = _falsify(samples, func)
+            costs = list(_falsify(samples, func))
+            nfev = len(costs)  # Number of samples evaluated before falsification or budget exhaustion
 
         average_cost = stats.mean(costs)
 
-        return UniformRandomResult(average_cost)
+        return UniformRandomResult(average_cost, nfev)
 
 
 @frozen(slots=True)
@@ -119,12 +123,14 @@ class DualAnnealingResult:
         jacobian_evals: Number of times the jacobian of the cost function was evaluated
         hessian_value: The value of the cost function hessian as the minimum cost discovered
         hessian_evals: Number of times the hessian of the cost function was evaluated
+        nfev: Number of function evaluations performed
     """
 
     jacobian_value: NDArray[np.float_] | None
     jacobian_evals: int
     hessian_value: NDArray[np.float_] | None
     hessian_evals: int
+    nfev: int
 
 
 class DualAnnealing(Optimizer[float, DualAnnealingResult]):
@@ -140,20 +146,48 @@ class DualAnnealing(Optimizer[float, DualAnnealingResult]):
     def optimize(
         self, func: ObjectiveFn[float], bounds: Bounds, budget: int, seed: int
     ) -> DualAnnealingResult:
-        def listener(sample: NDArray[np.float_], robustness: float, ctx: Literal[-1, 0, 1]) -> bool:
-            if robustness < 0 and self.behavior is Behavior.FALSIFICATION:
-                return True
+        # Track evaluations and implement early termination for FALSIFICATION
+        evaluation_count = {'nfev': 0}
+        found_falsification = {'found': False}
+        
+        def objective_wrapper(x):
+            if evaluation_count['nfev'] >= budget:
+                return np.inf  # Stop if budget exceeded
+            
+            cost = func.eval_sample(Sample(x))
+            evaluation_count['nfev'] += 1
+            
+            # Check for early termination due to falsification
+            if self.behavior == Behavior.FALSIFICATION and cost < 0:
+                found_falsification['found'] = True
+                # Force termination by raising an exception that dual_annealing will catch
+                raise StopIteration("Falsification found")
+            
+            return cost
 
+        def listener(sample: NDArray[np.float_], robustness: float, ctx: Literal[-1, 0, 1]) -> bool:
+            # Keep the original callback for compatibility, but don't rely on it for termination
             return False
 
-        result = optimize.dual_annealing(
-            func=lambda x: func.eval_sample(Sample(x)),
-            bounds=[bound.astuple() for bound in bounds],
-            seed=seed,
-            maxfun=budget,
-            no_local_search=True,  # Disable local search, use only traditional generalized SA
-            callback=listener,
-        )
+        try:
+            result = optimize.dual_annealing(
+                func=objective_wrapper,
+                bounds=[bound.astuple() for bound in bounds],
+                seed=seed,
+                maxfun=budget,
+                no_local_search=True,  # Disable local search, use only traditional generalized SA
+                callback=listener,
+            )
+        except StopIteration:
+            # Create a dummy result when stopped early due to falsification
+            class DummyResult:
+                def __init__(self):
+                    self.nfev = evaluation_count['nfev']
+                    self.jac = None
+                    self.njev = 0
+                    self.hess = None
+                    self.nhev = 0
+            result = DummyResult()
 
         try:
             jac: NDArray[np.float_] | None = result.jac
@@ -169,7 +203,10 @@ class DualAnnealing(Optimizer[float, DualAnnealingResult]):
             hess = None
             nhev = 0
 
-        return DualAnnealingResult(jac, njev, hess, nhev)
+        # Use our tracked function evaluation count instead of SciPy's count
+        nfev = evaluation_count['nfev']
+
+        return DualAnnealingResult(jac, njev, hess, nhev, nfev)
 
 
 @frozen(slots=True)

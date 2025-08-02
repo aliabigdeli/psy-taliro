@@ -13,7 +13,7 @@ from staliro.core.interval import Interval
 from staliro.core.model import BasicResult, Model, ModelInputs, ModelResult, Trace, ExtraResult
 from staliro.core.result import best_eval, best_run, worst_eval, worst_run
 from staliro.core.signal import Signal
-from staliro.optimizers import DualAnnealing, LLMOptimizer, LLMGrayBoxOpt, DifferentialEvolution, PSO, BasinHopping, CMAES
+from staliro.optimizers import DualAnnealing, LLMOptimizer, LLMGrayBoxOpt, DifferentialEvolution, PSO, BasinHopping, CMAES, UniformRandom
 from staliro.options import Options, SignalOptions
 from staliro.specifications import RTAMTDiscrete, RTAMTDense
 from staliro.staliro import simulate_model, staliro
@@ -230,14 +230,21 @@ if __name__ == "__main__":
         "--optimizer", 
         type=str, 
         default="DA", 
-        choices=["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES"],
-        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES"])
+        choices=["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES", "UR"],
+        help="Optimizer to use (default: DA). Available options: " + ", ".join(["DA", "LLM", "LLMGB", "DE", "PSO", "BH", "CMAES", "UR"])
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
         help="Random seed for reproducible results (default: 42)"
+    )
+    parser.add_argument(
+        "-m",
+        "--max-budget",
+        type=int,
+        default=100,
+        help="Maximum number of iterations/budget for optimization (default: 100)"
     )
     args = parser.parse_args()
     
@@ -346,10 +353,12 @@ if __name__ == "__main__":
             popsize=None,           # Use default CMA-ES population sizing
             maxiter_factor=50       # Conservative iteration factor
         )
+    elif args.optimizer == "UR":
+        optimizer = UniformRandom()
     else:
         optimizer = DualAnnealing()
     
-    options = Options(runs=1, iterations=100, interval=(0, 100), signals=signals, seed=args.seed)
+    options = Options(runs=1, iterations=args.max_budget, interval=(0, 100), signals=signals, seed=args.seed)
     result = staliro(model, specification, optimizer, options)
 
     # best sample has the lowest robustness value (in falsification)
@@ -366,7 +375,7 @@ if __name__ == "__main__":
     # Check if CSV file exists and write header if it doesn't
     file_exists = os.path.exists(csv_filename)
     with open(csv_filename, 'a', newline='') as csvfile:
-        fieldnames = ['specification', 'seed', 'robustness', 'Falsified']
+        fieldnames = ['specification', 'seed', 'robustness', 'Falsified', 'nfev']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
         # Write header if file is new
@@ -389,22 +398,10 @@ if __name__ == "__main__":
         os.makedirs("./cc_all_specs")
         print("Created ./cc_all_specs folder")
     
-    if isinstance(optimizer, DualAnnealing):
-        filename = f"./cc_all_specs/cc_{spec_name}_DA_rb{int(robustness)}"
-    elif isinstance(optimizer, LLMGrayBoxOpt):
-        filename = f"./cc_all_specs/cc_{spec_name}_LLMGB_rb{int(robustness)}"
-    elif isinstance(optimizer, LLMOptimizer):
-        filename = f"./cc_all_specs/cc_{spec_name}_LLM_rb{int(robustness)}"
-    elif isinstance(optimizer, DifferentialEvolution):
-        filename = f"./cc_all_specs/cc_{spec_name}_DE_rb{int(robustness)}"
-    elif isinstance(optimizer, PSO):
-        filename = f"./cc_all_specs/cc_{spec_name}_PSO_rb{int(robustness)}"
-    elif isinstance(optimizer, BasinHopping):
-        filename = f"./cc_all_specs/cc_{spec_name}_BH_rb{int(robustness)}"
-    elif isinstance(optimizer, CMAES):
-        filename = f"./cc_all_specs/cc_{spec_name}_CMAES_rb{int(robustness)}"
-    else:
-        filename = f"./cc_all_specs/cc_{spec_name}_rb{int(robustness)}"
+    dir_path = f"./cc_all_specs/{args.optimizer}"
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+    filename = f"./cc_all_specs/{args.optimizer}/cc_{spec_name}_{args.optimizer}_rb{int(robustness)}"
     
     # Write additional information to text file
     txt_filename = filename + ".txt"
@@ -416,7 +413,7 @@ if __name__ == "__main__":
         f.write(f"Random Seed: {args.seed}\n")
         f.write(f"Simulation Interval: {options.interval}\n")
         f.write(f"Number of Runs: {options.runs}\n")
-        f.write(f"Number of Iterations: {options.iterations}\n")
+        f.write(f"Number of Iterations (Max Budget): {options.iterations}\n")
         f.write(f"Number of Function Evaluations (equals to # of objective function call & model simulation & Simulink run): {result.runs[0].result.nfev}\n\n")
         
         # Show counterexample sample if violation occurred
