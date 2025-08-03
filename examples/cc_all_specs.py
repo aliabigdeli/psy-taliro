@@ -368,6 +368,10 @@ if __name__ == "__main__":
     # Evaluate robustness
     robustness = specification.evaluate(best_result.trace.states, best_result.trace.times)
     
+    # Check if ./cc_all_specs folder exists, if not create it
+    if not os.path.exists("./cc_all_specs"):
+        os.makedirs("./cc_all_specs")
+        print("Created ./cc_all_specs folder")
     # Save results to CSV file
     csv_filename = f"./cc_all_specs/results_{args.optimizer}.csv"
     is_falsified = robustness < 0
@@ -393,10 +397,6 @@ if __name__ == "__main__":
     
     print(f"Results saved to CSV: {csv_filename}")
     
-    # Check if ./cc_all_specs folder exists, if not create it
-    if not os.path.exists("./cc_all_specs"):
-        os.makedirs("./cc_all_specs")
-        print("Created ./cc_all_specs folder")
     
     dir_path = f"./cc_all_specs/{args.optimizer}"
     if not os.path.exists(dir_path):
