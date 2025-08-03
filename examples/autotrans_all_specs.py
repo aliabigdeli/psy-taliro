@@ -280,7 +280,7 @@ if __name__ == "__main__":
 
     if args.optimizer == "LLM":
         # Create prompts filename based on specification and seed
-        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
+        prompts_filename = f"./autotrans_all_specs/{args.optimizer}/prompts_{spec_name}_LLM_seed{args.seed}.txt"
         
         optimizer = LLMOptimizer(
             max_history=50,
@@ -312,7 +312,7 @@ if __name__ == "__main__":
         }
         
         # Create prompts filename based on specification and seed
-        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
+        prompts_filename = f"./autotrans_all_specs/{args.optimizer}/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
         
         optimizer = LLMGrayBoxOpt(
             dimension_descriptions=dimension_descriptions,
@@ -437,11 +437,7 @@ if __name__ == "__main__":
     print(f"\nAnalysis report saved as: {txt_filename}")
     
     # Print prompts file location if using LLM optimizers
-    if isinstance(optimizer, LLMGrayBoxOpt):
-        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLMGB_seed{args.seed}.txt"
-        print(f"LLM prompts saved as: {prompts_filename}")
-    elif isinstance(optimizer, LLMOptimizer):
-        prompts_filename = f"./autotrans_all_specs/prompts_{spec_name}_LLM_seed{args.seed}.txt"
+    if isinstance(optimizer, LLMGrayBoxOpt) or isinstance(optimizer, LLMOptimizer):
         print(f"LLM prompts saved as: {prompts_filename}")
         
     # Use generalized plotting function
