@@ -146,7 +146,7 @@ def main():
     parser.add_argument(
         "-o", "--optimizer",
         default="DA",
-        choices=["DA", "DE", "BH", "PSO", "CMAES", "LLM", "LLMGB"],
+        choices=["DA", "DE", "BH", "PSO", "CMAES", "LLM", "LLMGB", "UR"],
         help="Optimizer to use (default: DA)"
     )
     parser.add_argument(
