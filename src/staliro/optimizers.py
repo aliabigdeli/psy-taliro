@@ -278,13 +278,13 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
         prompt = f"""You are an optimization assistant. Your task is to generate a new sample point that will minimize the objective function.
 
 The input space has {len(bounds)} dimensions with the following bounds:
-{chr(10).join(f"Dimension {i}: [{bound.lower}, {bound.upper}]" for i, bound in enumerate(bounds))}
+{chr(10).join(f"Dimension {i+1}: [{bound.lower}, {bound.upper}]" for i, bound in enumerate(bounds))}
 
 Here are the previous {min(len(history), self.max_history)} samples and their costs:
-{chr(10).join(f"Sample {i}: {sample} -> Cost: {cost}" for i, (sample, cost) in enumerate(history[-self.max_history:]))}
+{chr(10).join(f"Sample {i+1}: {sample} -> Cost: {cost}" for i, (sample, cost) in enumerate(history[-self.max_history:]))}
 
-Based on this history, generate a new sample point that is likely to have a lower cost.
-Return only the sample point as a comma-separated list of numbers within the bounds.
+Based on this history, generate a new sample point that is different from all points above and is likely to have a lower cost.
+Think step by step and generate the new sample point as a comma-separated list of numeric numbers within the bounds. Do not write code. At the end of your response, put the new sample with {len(bounds)} dimensions. The sample point should start with '<point>' then the comma-separated list of numbers and end with '</point>'.
 """
         return prompt
 
@@ -314,19 +314,59 @@ Return only the sample point as a comma-separated list of numbers within the bou
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You are an optimization assistant that generates sample points as comma-separated numbers."},
+                    {"role": "system", "content": "You are an optimization assistant that generates a sample point."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=self.temperature,
-                max_tokens=100
+                temperature=self.temperature
             )
             
             # Extract the response text
             response_text = response.choices[0].message.content.strip()
+
+            if self.save_prompts:    
+                if "gpt-4o-mini" in self.model_name:
+                    input_rate = 0.15
+                    output_rate = 0.60
+                elif "gpt-4o" in self.model_name:
+                    input_rate = 2.50
+                    output_rate = 10.0
+                elif "gpt-4.1-nano" in self.model_name:
+                    input_rate = 0.10
+                    output_rate = 0.40
+                elif "gpt-4.1-mini" in self.model_name:
+                    input_rate = 0.40
+                    output_rate = 1.60
+                elif "gpt-4.1" in self.model_name:
+                    input_rate = 2.0
+                    output_rate = 8.0
+                else:
+                    raise ValueError(f"the rate cost for model {self.model_name} is not defined")
+                usage = response.usage
+                input_cost = (usage.prompt_tokens / 1_000_000) * input_rate
+                output_cost = (usage.completion_tokens / 1_000_000) * output_rate
+                total_cost = input_cost + output_cost
+                # Save the LLM response text to a file for inspection
+                try:
+                    with open(self.prompt_file, "a", encoding="utf-8") as f:
+                        f.write(f"\n{'='*40}\n")
+                        f.write(f"LLM Response:\n")
+                        f.write(response_text)
+                        f.write(f"\n{'='*40}\n")
+                        f.write(f"Input cost: ${input_cost:.6f}, Output cost: ${output_cost:.6f}, Total cost: ${total_cost:.6f}")
+                except Exception as file_exc:
+                    print(f"Warning: Could not save LLM response to file: {file_exc}")
             
             # Try to parse the response as a list of numbers
-            # First, try to find numbers in the text using regex
-            numbers = re.findall(r'-?\d*\.?\d+', response_text)
+            # First, try to find content between <point></point> tags
+            point_match = re.search(r'<point>(.*?)</point>', response_text, re.DOTALL)
+            
+            if point_match:
+                # Extract content between tags and find numbers in it
+                point_content = point_match.group(1).strip()
+                numbers = re.findall(r'-?\d*\.?\d+', point_content)
+            else:
+                # Fallback: find all numbers in the entire response using regex
+                numbers = re.findall(r'-?\d*\.?\d+', response_text)
             
             if not numbers:
                 raise ValueError("No numbers found in LLM response")
@@ -576,7 +616,7 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
         # Create dimension information with descriptions
         dimension_info = []
         for i, (bound, desc) in enumerate(zip(bounds, self.dimension_descriptions)):
-            dimension_info.append(f"Dimension {i}: [{bound.lower}, {bound.upper}] - {desc}")
+            dimension_info.append(f"Dimension {i+1}: [{bound.lower}, {bound.upper}] - {desc}")
         
         # Translate STL specification to natural language
         stl_natural = self._translate_stl_to_natural_language(self.specification.phi)
@@ -597,7 +637,7 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
             history_display = []
             for i, (sample, cost, output_state) in enumerate(history_with_states):
                 sample_str = [f'{val:.3f}' for val in sample]
-                history_line = f"Sample {i}: {sample_str} -> Cost: {cost:.6f}"
+                history_line = f"Sample {i+1}: {sample_str} -> Cost: {cost:.6f}"
                 if self.include_output_states and output_state != "Output states not included":
                     history_line += f"\n    Output: {output_state}"
                 history_display.append(history_line)
@@ -627,12 +667,12 @@ OPTIMIZATION CONTEXT:
 RECENT OPTIMIZATION HISTORY (last {min(len(history_with_states), self.max_history)} samples):
 {history_text}
 
-Based on this history, the specification requirements{"" if not self.include_output_states else ", the dimension meanings, and the observed system outputs"}, generate a new sample point (not in the history) that is likely to achieve a lower cost (violation).
+Based on this history, the specification requirements{"" if not self.include_output_states else ", the dimension meanings, and the observed system outputs"}, generate a new sample point that is different from all points above and is likely to achieve a lower cost (violation).
 Consider:
 1. Which parameter combinations led to lower costs in the history{"" if not self.include_output_states else chr(10) + "2. How the system outputs changed with different input parameters"}
 {2 if not self.include_output_states else 3}. The physical/logical meaning of each parameter and how it affects the output variables
 {3 if not self.include_output_states else 4}. How the specification constrains the output variables and what inputs might violate these constraints{"" if not self.include_output_states else chr(10) + "5. Patterns in the output states that might indicate approaching or achieving violations"}
-Return only the sample point as a comma-separated list of numbers within the specified bounds.
+Think step by step and generate the new sample point as a comma-separated list of numeric numbers within the bounds. Do not write code. At the end of your response, put the new sample with {len(bounds)} dimensions. The sample point should start with '<point>' then the comma-separated list of numbers and end with '</point>'.
 """
         return prompt
 
@@ -657,18 +697,59 @@ Return only the sample point as a comma-separated list of numbers within the spe
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You are an expert optimization assistant that understands system behavior and generates parameter values as comma-separated numbers."},
+                    {"role": "system", "content": "You are an expert optimization assistant that understands system behavior and generates a new sample point."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=self.temperature,
-                max_tokens=200
+                temperature=self.temperature
             )
             
             # Extract the response text
             response_text = response.choices[0].message.content.strip()
+
+            if self.save_prompts:    
+                if "gpt-4o-mini" in self.model_name:
+                    input_rate = 0.15
+                    output_rate = 0.60
+                elif "gpt-4o" in self.model_name:
+                    input_rate = 2.50
+                    output_rate = 10.0
+                elif "gpt-4.1-nano" in self.model_name:
+                    input_rate = 0.10
+                    output_rate = 0.40
+                elif "gpt-4.1-mini" in self.model_name:
+                    input_rate = 0.40
+                    output_rate = 1.60
+                elif "gpt-4.1" in self.model_name:
+                    input_rate = 2.0
+                    output_rate = 8.0
+                else:
+                    raise ValueError(f"the rate cost for model {self.model_name} is not defined")
+                usage = response.usage
+                input_cost = (usage.prompt_tokens / 1_000_000) * input_rate
+                output_cost = (usage.completion_tokens / 1_000_000) * output_rate
+                total_cost = input_cost + output_cost
+                # Save the LLM response text to a file for inspection
+                try:
+                    with open(self.prompt_file, "a", encoding="utf-8") as f:
+                        f.write(f"\n{'='*40}\n")
+                        f.write(f"LLM Response:\n")
+                        f.write(response_text)
+                        f.write(f"\n{'='*40}\n")
+                        f.write(f"Input cost: ${input_cost:.6f}, Output cost: ${output_cost:.6f}, Total cost: ${total_cost:.6f}")
+                except Exception as file_exc:
+                    print(f"Warning: Could not save LLM response to file: {file_exc}")
             
             # Try to parse the response as a list of numbers
-            numbers = re.findall(r'-?\d*\.?\d+', response_text)
+            # First, try to find content between <point></point> tags
+            point_match = re.search(r'<point>(.*?)</point>', response_text, re.DOTALL)
+            
+            if point_match:
+                # Extract content between tags and find numbers in it
+                point_content = point_match.group(1).strip()
+                numbers = re.findall(r'-?\d*\.?\d+', point_content)
+            else:
+                # Fallback: find all numbers in the entire response using regex
+                numbers = re.findall(r'-?\d*\.?\d+', response_text)
             
             if not numbers:
                 raise ValueError("No numbers found in LLM response")

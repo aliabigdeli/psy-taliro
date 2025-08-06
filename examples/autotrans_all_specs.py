@@ -283,7 +283,7 @@ if __name__ == "__main__":
         prompts_filename = f"./autotrans_all_specs/{args.optimizer}/prompts_{spec_name}_LLM_seed{args.seed}.txt"
         
         optimizer = LLMOptimizer(
-            max_history=50,
+            max_history=25,
             save_prompts=True,
             prompt_file=prompts_filename
         )
@@ -318,7 +318,7 @@ if __name__ == "__main__":
             dimension_descriptions=dimension_descriptions,
             specification=specification,
             output_descriptions=output_descriptions,
-            max_history=50,
+            max_history=25,
             temperature=0.8,
             save_prompts=True,
             prompt_file=prompts_filename,
