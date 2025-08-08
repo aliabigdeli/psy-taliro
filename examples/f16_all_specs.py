@@ -350,6 +350,13 @@ if __name__ == "__main__":
         default=100,
         help="Maximum number of iterations/budget for optimization (default: 100)"
     )
+    parser.add_argument(
+        "-l",
+        "--llm-model",
+        type=str,
+        default="openai/gpt-oss-20b",
+        help="LLM model to use (default: openai/gpt-oss-20b)"
+    )
     args = parser.parse_args()
     
     # Set random seed for reproducible results
@@ -373,6 +380,7 @@ if __name__ == "__main__":
         prompts_filename = f"./f16_all_specs/{args.optimizer}/prompts_{spec_name}_LLM_seed{args.seed}.txt"
         
         optimizer = LLMOptimizer(
+            model_name=args.llm_model,
             max_history=25,
             save_prompts=True,
             prompt_file=prompts_filename
@@ -402,6 +410,7 @@ if __name__ == "__main__":
             dimension_descriptions=dimension_descriptions,
             specification=specification,
             output_descriptions=output_descriptions,
+            model_name=args.llm_model,
             max_history=25,
             temperature=0.8,
             save_prompts=True,

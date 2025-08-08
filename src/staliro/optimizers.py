@@ -232,7 +232,7 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
     evaluations. The LLM is prompted with the optimization history and asked to generate new samples
     that are likely to improve upon previous results.
 
-    :param model_name: Name of the LLM model to use (e.g. "gpt-3.5-turbo")
+    :param model_name: Name of the LLM model to use (e.g. "gpt-4.1-nano")
     :param min_cost: The minimum cost to use as a termination condition
     :param temperature: Temperature parameter for LLM sampling (0.0 to 1.0)
     :param max_history: Maximum number of previous samples to include in LLM prompt
@@ -243,7 +243,7 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
 
     def __init__(
         self,
-        model_name: str = "gpt-4.1-nano",
+        model_name: str = "openai/gpt-oss-20b",
         min_cost: float | None = None,
         temperature: float = 0.7,
         max_history: int = 10,
@@ -264,10 +264,13 @@ class LLMOptimizer(Optimizer[float, LLMOptimizerResult]):
         
         # Read API key from file and set environment variable
         try:
-            with open("../api_key.txt", "r") as f:
-                api_key = f.read().strip()
-            os.environ["OPENAI_API_KEY"] = api_key
-            self.client = OpenAI()
+            if self.model_name == "openai/gpt-oss-20b":
+                self.client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+            else:
+                with open("../api_key.txt", "r") as f:
+                    api_key = f.read().strip()
+                os.environ["OPENAI_API_KEY"] = api_key
+                self.client = OpenAI()
         except FileNotFoundError:
             raise FileNotFoundError("api_key.txt file not found. Please create this file with your OpenAI API key.")
         except Exception as e:
@@ -311,24 +314,33 @@ Think step by step and generate the new sample point as a comma-separated list o
         """
         try:
             # Call OpenAI API using the new client interface
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": "You are an optimization assistant that generates a sample point."},
+            chat_params = {
+                "model": self.model_name,
+                "messages": [
+                    {"role": "system", "content": "You are an expert optimization assistant that understands system behavior and generates a new sample point."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=self.temperature
-            )
+                "temperature": self.temperature
+            }
+            
+            # Add reasoning_effort for specific model
+            if "gpt-oss" in self.model_name or "gpt-5" in self.model_name:
+                chat_params["reasoning_effort"] = "high"
+            
+            response = self.client.chat.completions.create(**chat_params)
             
             # Extract the response text
             response_text = response.choices[0].message.content.strip()
 
             if self.save_prompts:    
-                if "gpt-4o-mini" in self.model_name:
-                    input_rate = 0.15
-                    output_rate = 0.60
-                elif "gpt-4o" in self.model_name:
-                    input_rate = 2.50
+                if "gpt-5-nano" in self.model_name:
+                    input_rate = 0.05
+                    output_rate = 0.40
+                elif "gpt-5-mini" in self.model_name:
+                    input_rate = 0.25
+                    output_rate = 2.0
+                elif "gpt-5" in self.model_name:
+                    input_rate = 1.25
                     output_rate = 10.0
                 elif "gpt-4.1-nano" in self.model_name:
                     input_rate = 0.10
@@ -339,8 +351,13 @@ Think step by step and generate the new sample point as a comma-separated list o
                 elif "gpt-4.1" in self.model_name:
                     input_rate = 2.0
                     output_rate = 8.0
+                elif "gpt-oss" in self.model_name:
+                    input_rate = 0.0
+                    output_rate = 0.0
                 else:
-                    raise ValueError(f"the rate cost for model {self.model_name} is not defined")
+                    print(f"the rate cost for model {self.model_name} is not defined, so considered as gpt-5")
+                    input_rate = 1.25
+                    output_rate = 10.0
                 usage = response.usage
                 input_cost = (usage.prompt_tokens / 1_000_000) * input_rate
                 output_cost = (usage.completion_tokens / 1_000_000) * output_rate
@@ -352,7 +369,7 @@ Think step by step and generate the new sample point as a comma-separated list o
                         f.write(f"LLM Response:\n")
                         f.write(response_text)
                         f.write(f"\n{'='*40}\n")
-                        f.write(f"Input cost: ${input_cost:.6f}, Output cost: ${output_cost:.6f}, Total cost: ${total_cost:.6f}")
+                        f.write(f"Input cost: ${input_cost:.6f}, Output cost: ${output_cost:.6f}, Total cost of calling {self.model_name}: ${total_cost:.6f}")
                 except Exception as file_exc:
                     print(f"Warning: Could not save LLM response to file: {file_exc}")
             
@@ -476,7 +493,7 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
         dimension_descriptions: list[str],
         specification,
         output_descriptions: dict[str, str] | None = None,
-        model_name: str = "gpt-4.1-nano",
+        model_name: str = "openai/gpt-oss-20b",
         min_cost: float | None = None,
         temperature: float = 0.7,
         max_history: int = 10,
@@ -502,10 +519,13 @@ class LLMGrayBoxOpt(Optimizer[float, LLMOptimizerResult]):
         
         # Read API key from file and set environment variable
         try:
-            with open("../api_key.txt", "r") as f:
-                api_key = f.read().strip()
-            os.environ["OPENAI_API_KEY"] = api_key
-            self.client = OpenAI()
+            if self.model_name == "openai/gpt-oss-20b":
+                self.client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+            else:
+                with open("../api_key.txt", "r") as f:
+                    api_key = f.read().strip()
+                os.environ["OPENAI_API_KEY"] = api_key
+                self.client = OpenAI()
         except FileNotFoundError:
             raise FileNotFoundError("api_key.txt file not found. Please create this file with your OpenAI API key.")
         except Exception as e:
@@ -694,24 +714,33 @@ Think step by step and generate the new sample point as a comma-separated list o
         """Generate a new sample using the LLM with enhanced error handling."""
         try:
             # Call OpenAI API using the new client interface
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
+            chat_params = {
+                "model": self.model_name,
+                "messages": [
                     {"role": "system", "content": "You are an expert optimization assistant that understands system behavior and generates a new sample point."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=self.temperature
-            )
+                "temperature": self.temperature
+            }
+            
+            # Add reasoning_effort for specific model
+            if "gpt-oss" in self.model_name or "gpt-5" in self.model_name:
+                chat_params["reasoning_effort"] = "high"
+            
+            response = self.client.chat.completions.create(**chat_params)
             
             # Extract the response text
             response_text = response.choices[0].message.content.strip()
 
             if self.save_prompts:    
-                if "gpt-4o-mini" in self.model_name:
-                    input_rate = 0.15
-                    output_rate = 0.60
-                elif "gpt-4o" in self.model_name:
-                    input_rate = 2.50
+                if "gpt-5-nano" in self.model_name:
+                    input_rate = 0.05
+                    output_rate = 0.40
+                elif "gpt-5-mini" in self.model_name:
+                    input_rate = 0.25
+                    output_rate = 2.0
+                elif "gpt-5" in self.model_name:
+                    input_rate = 1.25
                     output_rate = 10.0
                 elif "gpt-4.1-nano" in self.model_name:
                     input_rate = 0.10
@@ -722,8 +751,13 @@ Think step by step and generate the new sample point as a comma-separated list o
                 elif "gpt-4.1" in self.model_name:
                     input_rate = 2.0
                     output_rate = 8.0
+                elif "gpt-oss" in self.model_name:
+                    input_rate = 0.0
+                    output_rate = 0.0
                 else:
-                    raise ValueError(f"the rate cost for model {self.model_name} is not defined")
+                    print(f"the rate cost for model {self.model_name} is not defined, so considered as gpt-5")
+                    input_rate = 1.25
+                    output_rate = 10.0
                 usage = response.usage
                 input_cost = (usage.prompt_tokens / 1_000_000) * input_rate
                 output_cost = (usage.completion_tokens / 1_000_000) * output_rate
@@ -735,7 +769,7 @@ Think step by step and generate the new sample point as a comma-separated list o
                         f.write(f"LLM Response:\n")
                         f.write(response_text)
                         f.write(f"\n{'='*40}\n")
-                        f.write(f"Input cost: ${input_cost:.6f}, Output cost: ${output_cost:.6f}, Total cost: ${total_cost:.6f}")
+                        f.write(f"Input cost: ${input_cost:.6f}, Output cost: ${output_cost:.6f}, Total cost of calling {self.model_name}: ${total_cost:.6f}")
                 except Exception as file_exc:
                     print(f"Warning: Could not save LLM response to file: {file_exc}")
             

@@ -181,7 +181,6 @@ def plot_trace_variables(specification, trace, filename="autotrans.jpeg"):
 # Define Specifications (all specifications)
 
 AT1_phi = "G[0, 20] (speed <= 120)"
-# AT0_phi = "G[0, 20] (speed <= 30)"
 
 AT2_phi = "G[0, 10] (rpm <= 4750)"
 
@@ -197,21 +196,18 @@ AT53_phi = f"G[0, 30] (((not {gear_3_phi}) and (F[0.001,0.1] {gear_3_phi})) -> (
 gear_4_phi = f"(gear <= 4.5 and gear >= 3.5)"
 AT54_phi = f"G[0, 30] (((not {gear_4_phi}) and (F[0.001,0.1] {gear_4_phi})) -> (F[0.001, 0.1] (G[0,2.5] {gear_4_phi})))"
 
-# AT6_0_phi = "((G[0, 30] (rpm <= 4500)) -> (G[0,4] (speed <= 20)))"
 AT6a_phi = "((G[0, 30] (rpm <= 3000)) -> (G[0,4] (speed <= 35)))"
 AT6b_phi = "((G[0, 30] (rpm <= 3000)) -> (G[0,8] (speed <= 50)))"
 AT6c_phi = "((G[0, 30] (rpm <= 3000)) -> (G[0,20] (speed <= 65)))"
 AT6abc_phi = f"{AT6a_phi} and {AT6b_phi} and {AT6c_phi}"
 
 spec_dict = {
-    # "AT0": RTAMTDense(AT0_phi, {"speed": 0}),
     "AT1": RTAMTDense(AT1_phi, {"speed": 0}),
     "AT2": RTAMTDense(AT2_phi, {"rpm": 1}),
     "AT51": RTAMTDense(AT51_phi, {"gear": 2}),    
     "AT52": RTAMTDense(AT52_phi, {"gear": 2}),    
     "AT53": RTAMTDense(AT53_phi, {"gear": 2}),    
     "AT54": RTAMTDense(AT54_phi, {"gear": 2}),    
-    # "AT61-0": RTAMTDense(AT6_0_phi, {"speed": 0, "rpm":1}),
     "AT61": RTAMTDense(AT6a_phi, {"speed": 0, "rpm":1}),
     "AT62": RTAMTDense(AT6b_phi, {"speed": 0, "rpm":1}),
     "AT63": RTAMTDense(AT6c_phi, {"speed": 0, "rpm":1}),
@@ -259,6 +255,13 @@ if __name__ == "__main__":
         default=100,
         help="Maximum number of iterations/budget for optimization (default: 100)"
     )
+    parser.add_argument(
+        "-l",
+        "--llm-model",
+        type=str,
+        default="openai/gpt-oss-20b",
+        help="LLM model to use (default: openai/gpt-oss-20b)"
+    )
     args = parser.parse_args()
     
     # Set random seed for reproducible results
@@ -283,6 +286,7 @@ if __name__ == "__main__":
         prompts_filename = f"./autotrans_all_specs/{args.optimizer}/prompts_{spec_name}_LLM_seed{args.seed}.txt"
         
         optimizer = LLMOptimizer(
+            model_name=args.llm_model,
             max_history=25,
             save_prompts=True,
             prompt_file=prompts_filename
@@ -318,6 +322,7 @@ if __name__ == "__main__":
             dimension_descriptions=dimension_descriptions,
             specification=specification,
             output_descriptions=output_descriptions,
+            model_name=args.llm_model,
             max_history=25,
             temperature=0.8,
             save_prompts=True,

@@ -30,7 +30,6 @@ def get_benchmark_config(benchmark: str) -> Dict:
         return {
             "script": "autotrans_all_specs.py",
             "specs": ["AT1", "AT2", "AT51", "AT52", "AT53", "AT54", "AT61", "AT62", "AT63", "AT64"],
-            "default_timeout": 3000,
             "output_dir": "autotrans_all_specs",
             "summary_file": "autotrans_analysis_summary.txt"
         }
@@ -38,7 +37,6 @@ def get_benchmark_config(benchmark: str) -> Dict:
         return {
             "script": "cc_all_specs.py", 
             "specs": ["CC1", "CC2", "CC3", "CC4", "CC5", "CCx"],
-            "default_timeout": 3000,
             "output_dir": "cc_all_specs",
             "summary_file": "cc_analysis_summary.txt"
         }
@@ -46,7 +44,6 @@ def get_benchmark_config(benchmark: str) -> Dict:
         return {
             "script": "f16_all_specs.py",
             "specs": ["F16_ALT1", "F16_ALT2", "F16_ALT3", "F16_ROLL1", "F16_ROLL2", "F16_ROLL3", "F16_PITCH1", "F16_PITCH2", "F16_PITCH3", "F16_YAW1", "F16_MODE1", "F16_MODE2", "F16_SAFE1", "F16_SAFE2"],
-            "default_timeout": 3000,
             "output_dir": "f16_all_specs",
             "summary_file": "f16_analysis_summary.txt"
         }
@@ -82,12 +79,19 @@ def run_spec(benchmark: str, spec: str, optimizer: str, seed: int, timeout: int)
     print(f"Running: {' '.join(cmd)}")
     
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+        if timeout is not None:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+        else:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
         
         if result.returncode != 0:
             print(f"❌ Command failed with return code {result.returncode}")
@@ -152,7 +156,8 @@ def main():
     parser.add_argument(
         "-t", "--timeout",
         type=int,
-        help="Timeout in seconds for each run (default: benchmark-specific)"
+        default=None,
+        help="Timeout in seconds for each run (default: None - no timeout)"
     )
     parser.add_argument(
         "--run-llm",
@@ -180,12 +185,15 @@ def main():
     output_dir = config["output_dir"]
     summary_file = config["summary_file"]
     
-    # Use provided timeout or benchmark default
-    timeout = args.timeout if args.timeout is not None else config["default_timeout"]
+    # Use provided timeout (None means no timeout)
+    timeout = args.timeout
     
     print(f"🚀 Starting systematic {args.benchmark.upper()} specification analysis")
     print(f"🔧 Using optimizer: {args.optimizer}")
-    print(f"⏱️  Timeout per run: {timeout} seconds")
+    if timeout is not None:
+        print(f"⏱️  Timeout per run: {timeout} seconds")
+    else:
+        print(f"⏱️  No timeout limit")
     print("=" * 60)
     
     # Check if the required script exists
